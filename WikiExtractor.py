@@ -1266,7 +1266,7 @@ def findMatchingBraces(text, ldelim=0):
                     break
                 elif len(stack) == 1 and 0 < stack[0] < ldelim:
                     # ambiguous {{{{{ }}} }}
-                    #yield m1.start() + stack[0], end
+                    yield m1.start() + stack[0], end # Modified by Chao
                     cur = end
                     break
             elif brac == '[':  # [[
@@ -1865,7 +1865,8 @@ def sharp_invoke(module, function, args):
     if functions:
         funct = functions.get(function)
         if funct:
-            return text_type(funct(args))
+            return funct(*[args.get(str(i + 1)) for i in range(len(args))]) # Modified by Chao
+            # return text_type(funct(args))
     return ''
 
 
