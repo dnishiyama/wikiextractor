@@ -71,7 +71,6 @@ from io import StringIO
 from multiprocessing import Queue, Process, Value, cpu_count
 from timeit import default_timer
 
-
 PY2 = sys.version_info[0] == 2
 # Python 2.7 compatibiity
 if PY2:
@@ -130,7 +129,7 @@ options = SimpleNamespace(
     # wiktionary: Wiki dictionary
     # wikt: shortcut for Wiktionary
     #
-    acceptedNamespaces = ['w', 'wiktionary', 'wikt'],
+    acceptedNamespaces = ['w', 'wiktionary', 'wikt', 'Reconstruction'],
 
     # This is obtained from <siteinfo>
     urlbase = '',
@@ -220,7 +219,7 @@ g_page_articl_used_total=0
 def keepPage(ns, catSet, page):
     global g_page_articl_total,g_page_total,g_page_articl_used_total
     g_page_total += 1
-    if ns != '0':               # Aritcle
+    if ns not in  ['0', '118']:               # Article or Reconstruction
         return False
     # remove disambig pages if desired
     g_page_articl_total += 1
@@ -283,6 +282,7 @@ selfClosingTags = ('br', 'hr', 'nobr', 'ref', 'references', 'nowiki')
 placeholder_tags = {'math': 'formula', 'code': 'codice'}
 
 
+# Unused
 def normalizeTitle(title):
     """Normalize title"""
     # remove leading/trailing whitespace and underscores
@@ -547,7 +547,7 @@ class Extractor(object):
         """
         self.id = id
         self.revid = revid
-        self.title = title
+        self.title = re.sub(r"Reconstruction:[^\/]+\/", "", title)
         self.text = ''.join(lines)
         self.magicWords = MagicWords()
         self.frame = Frame()
@@ -598,7 +598,8 @@ class Extractor(object):
         """
         :param out: a memory file.
         """
-        logging.info('%s\t%s', self.id, self.title)
+        # But I want the other info
+        # logging.info('%s\t%s', self.id, self.title)
 
         # Separate header from text with a newline.
         if options.toHTML:
@@ -687,7 +688,9 @@ class Extractor(object):
             return self.expand(text)
         else:
             # Drop transclusions (template, parser functions)
-            return dropNested(text, r'{{', r'}}')
+            # return dropNested(text, r'{{', r'}}')
+            # Returning text to keep the templates. might want to only keep some
+            return text
 
 
     def wiki2text(self, text):
@@ -708,8 +711,10 @@ class Extractor(object):
         # Drop tables
         # first drop residual templates, or else empty parameter |} might look like end of table.
         if not options.keep_tables:
-            text = dropNested(text, r'{{', r'}}')
-            text = dropNested(text, r'{\|', r'\|}')
+        	# This removes the templates. So let's not do it
+            # text = dropNested(text, r'{{', r'}}')
+            # text = dropNested(text, r'{\|', r'\|}')
+            pass
 
         # Handle bold/italic/quote
         if options.toHTML:
