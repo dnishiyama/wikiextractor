@@ -2640,8 +2640,8 @@ def compact(text):
 			page.append(line)
 
 		# Drop residuals of lists
-		elif line[0] in '{|' or line[-1] == '}':
-			print("line", line)
+		# DGN this is where a lot of the templates were being dropped
+		elif (line[0] in '{|' and line[0:2] != '{{') or (line[-1] == '}' and line[-2:] != '}}'):
 			continue
 		# Drop irrelevant lines
 		elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
