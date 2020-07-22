@@ -556,10 +556,10 @@ class Extractor(object):
 		self.recursion_exceeded_3_errs = 0	# parameter recursion
 		self.template_title_errs = 0
 
-	def write_output(self, out, text):
+	def write_output(self, out, data):
 		"""
 		:param out: a memory file
-		:param text: the text of the page
+		:param data: the data of the page {"English": {"Pronunciation": "/ba.na.na/", "Etymology_1": "This is the ety"} }
 		"""
 		url = get_url(self.id)
 		if options.write_json:
@@ -567,7 +567,7 @@ class Extractor(object):
 				'id': self.id,
 				'url': url,
 				'title': self.title,
-				'text': "\n".join(text)
+				'data': data,
 			}
 			if options.print_revision:
 				json_data['revid'] = self.revid
@@ -647,14 +647,15 @@ class Extractor(object):
 		text = self.transform(text)
 		text = self.wiki2text(text)
 		# if self.title=='afraidness': print(compact(self.clean(text)))
-		text = compact(self.clean(text))
-		# from zwChan
-		text = [title_str] + text
+		data = compact(self.clean(text))
+		# from zwChan DGN removal for data output
+		# text = [title_str] + text
 
-		if sum(len(line) for line in text) < options.min_text_length:
-			return
+		# DGN remove this to be safe
+		# if sum(len(line) for line in text) < options.min_text_length:
+		#	return
 
-		self.write_output(out, text)
+		self.write_output(out, data)
 
 		errs = (self.template_title_errs,
 				self.recursion_exceeded_1_errs,
@@ -2533,8 +2534,10 @@ listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
 
 
 def compact(text):
+	if "==Zazaki==" in text: print(text)
 	"""Deal with headers, lists, empty sections, residuals of tables.
 	:param text: convert to HTML.
+	:return data: a dictionary of the Languages, Etymologies and Pronunciations
 	"""
 
 	page = []			  # list of paragraph
@@ -2713,7 +2716,7 @@ class OutputSplitter(object):
 		:param nextFile: a NextFile object from which to obtain filenames
 			to use.
 		:param max_file_size: the maximum size of each file.
-		:para compress: whether to write data with bzip compression.
+		:param compress: whether to write data with bzip compression.
 		"""
 		self.nextFile = nextFile
 		self.compress = compress
