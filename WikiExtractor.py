@@ -2533,8 +2533,18 @@ listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
 			':': '<dd>%s</dd>'}
 
 
+all_pos = ['adfix', 'adjective', 'adnoun', 'adverb', 'article', 'auxiliary verb', 'cardinal number', 'collective numeral',
+		   'conjunction', 'coverb', 'demonstrative determiner', 'demonstrative pronoun', 'determinative', 'determiner',
+		   'gerund', 'indefinite pronoun', 'infinitive', 'interjection', 'interrogative pronoun', 'intransitive verb',
+		   'noun', 'number', 'numeral', 'ordinal', 'ordinal number', 'part of speech', 'participle', 'particle',
+		   'personal pronoun', 'phrasal preposition', 'possessive adjective', 'possessive determiner', 'possessive pronoun',
+		   'postposition', 'preposition', 'preverb', 'pronoun', 'quasi-adjective', 'reciprocal pronoun', 'reflexive pronoun',
+		   'relative pronoun', 'speech disfluency', 'substantive', 'transitive', 'transitive verb', 'verb', 'verbal noun',
+		   'infix', 'suffix', 'prefix', 'root'] # Last 4 needed for reconstructions
+
+
 def compact(text):
-	if "==Zazaki==" in text: print(text)
+	# if "==Zazaki==" in text: print(text)
 	"""Deal with headers, lists, empty sections, residuals of tables.
 	:param text: convert to HTML.
 	:return data: a dictionary of the Languages, Etymologies and Pronunciations
@@ -2545,6 +2555,8 @@ def compact(text):
 	emptySection = False  # empty sections are discarded
 	listLevel = []		  # nesting of lists
 	listCount = []		  # count of each list (it should be always in the same length of listLevel)
+	nodeClass = None # For knowing how to handle it
+	data = {} # return dictionary
 	for line in text.split('\n'):
 		if not line:			# collapse empty lines
 			# if there is an opening list, close it if we see an empty line
@@ -2563,11 +2575,10 @@ def compact(text):
 		m = section.match(line)
 		if m:
 			title = m.group(2)
+			node_class = re.sub('_\d+| \d+', '', title).lower() #removed '_x' info
 			lev = len(m.group(1)) # header level
-			if options.toHTML:
-				page.append("<h%d>%s</h%d>" % (lev, title, lev))
-			if title and title[-1] not in '!?':
-				title += '.'	# terminate sentence.
+			# if title and title[-1] not in '!?':
+				# title += '.'	# terminate sentence.
 			headers[lev] = title
 			# drop previous headers
 			for i in list(headers.keys()):
@@ -2581,9 +2592,7 @@ def compact(text):
 		elif line.startswith('++'):
 			title = line[2:-2]
 			if title:
-				if title[-1] not in '!?':
-					title += '.'
-				page.append(title)
+				data.append({title: {}})
 		# handle indents
 		elif line[0] == ':':
 			# page.append(line.lstrip(':*#;'))
@@ -2635,9 +2644,6 @@ def compact(text):
 						n = '*'
 					page.append(listItem[n] % line)
 		elif len(listLevel):
-			if options.toHTML:
-				for c in reversed(listLevel):
-					page.append(listClose[c])
 			listLevel = []
 			listCount = []
 			page.append(line)
@@ -2650,6 +2656,8 @@ def compact(text):
 		elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
 			continue
 		elif len(headers):
+			
+			for 
 			if options.keepSections:
 				items = sorted(headers.items())
 				for i, v in items:
