@@ -548,6 +548,9 @@ class Extractor(object):
 		self.id = id
 		self.revid = revid
 		self.title = re.sub(r"Reconstruction:[^\/]+\/", "", title) # added this to fix reconstruction entries DGN
+
+		reconstructed_language = re.search(r'(?<=Reconstruction:)[^\/]+(?=\/.*)', title)
+		self.reconstructed_language = reconstructed_language.group(0) if reconstructed_language else None
 		self.text = ''.join(lines)
 		self.magicWords = MagicWords()
 		self.frame = Frame()
@@ -647,7 +650,7 @@ class Extractor(object):
 		text = self.transform(text)
 		text = self.wiki2text(text)
 		# if self.title=='afraidness': print(compact(self.clean(text)))
-		data = compact(self.clean(text))
+		data = compact(self.clean(text), self.title, self.reconstructed_language)
 		# from zwChan DGN removal for data output
 		# text = [title_str] + text
 
@@ -2534,143 +2537,310 @@ listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
 
 
 all_pos = ['adfix', 'adjective', 'adnoun', 'adverb', 'article', 'auxiliary verb', 'cardinal number', 'collective numeral',
-		   'conjunction', 'coverb', 'demonstrative determiner', 'demonstrative pronoun', 'determinative', 'determiner',
-		   'gerund', 'indefinite pronoun', 'infinitive', 'interjection', 'interrogative pronoun', 'intransitive verb',
-		   'noun', 'number', 'numeral', 'ordinal', 'ordinal number', 'part of speech', 'participle', 'particle',
-		   'personal pronoun', 'phrasal preposition', 'possessive adjective', 'possessive determiner', 'possessive pronoun',
-		   'postposition', 'preposition', 'preverb', 'pronoun', 'quasi-adjective', 'reciprocal pronoun', 'reflexive pronoun',
-		   'relative pronoun', 'speech disfluency', 'substantive', 'transitive', 'transitive verb', 'verb', 'verbal noun',
-		   'infix', 'suffix', 'prefix', 'root'] # Last 4 needed for reconstructions
+		'conjunction', 'coverb', 'demonstrative determiner', 'demonstrative pronoun', 'determinative', 'determiner',
+		'gerund', 'indefinite pronoun', 'infinitive', 'interjection', 'interrogative pronoun', 'intransitive verb',
+		'noun', 'number', 'numeral', 'ordinal', 'ordinal number', 'part of speech', 'participle', 'particle',
+		'personal pronoun', 'phrasal preposition', 'possessive adjective', 'possessive determiner', 'possessive pronoun',
+		'postposition', 'preposition', 'preverb', 'pronoun', 'quasi-adjective', 'reciprocal pronoun', 'reflexive pronoun',
+		'relative pronoun', 'speech disfluency', 'substantive', 'transitive', 'transitive verb', 'verb', 'verbal noun',
+		'infix', 'suffix', 'prefix', 'root'] # Last 4 needed for reconstructions
+
+re_pron = re.compile(r"(\/|\[)[^\/\]]+(\/|\])")
+pron_templates = ['ain-IPA', 'ang-IPA', 'ar-IPA', 'as-IPA', 'audio-IPA', 'be-IPA', 'bo-IPA', 'bg-IPA', 'ca-IPA',
+		 'ckb-IPA', 'zh-pron', 'cmn-pron', 'cs-IPA', 'egy-IPA-E', 'egy-IPA-R', 'eo-IPA', 'es-IPA', 'et-IPA', 'fa-IPA', 'fi-IPA',
+		 'fi-pronunciation', 'fr-IPA', 'grc-IPA', 'haw-IPA', 'hi-IPA', 'hu-IPA', 'hy-IPA', 'hy-pron', 'IPA', 'IPA letters', 'mh-ipa-rows',
+		 'IPAchar', 'IPAchar2', 'IPAfont', 'IPAlink', 'it-IPA', 'ja-accent-common', 'ja-accent-standard', 'ja-accent/down', 'ja-accent/high',
+		 'ja-accent/low', 'ja-accent/unvoiced', 'ja-pron', 'Jyutping-IPA', 'ka-IPA', 'kl-IPA', 'km-IPA', 'ko-IPA', 'la-IPA', 'lic-pron', 'liv-IPA',
+		 'mk-IPA', 'mh-pronunc-bender', 'mh-pronunc-phonemic', 'mh-pronunc-phonetic', 'mnc-IPA', 'my-IPA', 'nod-pron', 'ny-IPA', 'pcc-pron',
+		 'fa-pron', 'pl-IPA', 'pl-IPAchar', 'pt-IPA', 'ru-IPA', 'ru-IPA-manual', 'sa-IPA', 'se-IPA', 'sh-IPA', 'shn-pron', 'sk-IPA', 'Stokoe',
+		 'th-pron', 'tl-IPA', 'uk-IPA', 'ur-IPA', 'vi-IPA', 'x2i', 'X2IPA', 'x2ipachar', 'za-pron', 'zu-IPA',]
+ # 'fr-homophones-er',
+#  'enPR', Non IPA
+#  'enPRchar', Non IPA
+#  'fi-hyphenation', Non IPA
+#  'harakat-fa', # ignore NON IPA
+#  'homophones', # ignore NON IPA
+#  'hyphenation', # Non IPA
+#  'IPA letters/sandbox',
+#  'IPAsym',
+#  'rfap',
+#  'rfp',
+#  'rfp-old',
+#  'rfv-pron',
+#  'rhymes',
+#  'rhymes nav',
+#  'SAMPROSA',
+#  'U:en:non-rhotic rhymes',
+#  'x2rhymes',
+
+def shortenTemplate(template):
+	parts = splitParts(template[2:-2])
+	longest_part = max(range(len(parts)), key=lambda x: len(parts[x])); longest_part
+	return makeTemplateFromParts([s for i, s in enumerate(parts) if i != longest_part])
+
+def makeTemplateFromParts(template_parts:list):
+	return '{{' + '|'.join(template_parts) + '}}'
+
+def process_etymology(etymology_list: list): 
+	return "\n".join([e if type(e) == str else e[1] for e in etymology_list])
+
+def process_pronunciation(pron_list: list, title: str): 
+	# print(pron_list)
+	prons = [] # remove lines that don't have anything to do with pronunciation
+	for line in pron_list:
+		if type(line) != str and len(line[0]) > 1: continue # ignore nested bullets
+
+		pron_text = line if type(line) == str else line[1]
+		line_pron_templates = [ pron_text[f[0]:f[1]] for f in findMatchingBraces(pron_text) if splitParts(pron_text[f[0]+2 : f[1]-2])[0] in pron_templates ]
+
+		# fix line_pron_templates with no arguments e.g. {{cs-IPA}} of 'per' article
+		for i, line_pron_template in enumerate(line_pron_templates):
+			parts = splitParts(line_pron_template[2:-2])
+			if len(parts) == 1:
+				pron_text = pron_text.replace(line_pron_template, makeTemplateFromParts(parts + [title]))
+
+		if re_pron.search(pron_text) or len(line_pron_templates) != 0:
+			# fix 
+			prons.append(pron_text)
+
+	return prons
+
+def test_process_pronunciations():
+	pron_list = [[[1], '{{a|UK}} {{IPA|en|/pɜː(ɹ)/}}'], [[2], '{{a|US}} {{IPA|en|/pɝ/}}'], [[2, 1], '{{audio|en|en-us-per.ogg|Audio (US)}}'], [[3], '{{rhymes|en|ɜː(r)}}'], [[4], '{{homophones|en|purr}}']]
+	assert process_pronunciation(pron_list, 'any') == ['{{a|UK}} {{IPA|en|/pɜː(ɹ)/}}', '{{a|US}} {{IPA|en|/pɝ/}}']
+	pron_list = [[[1], '{{a|Balearic|Central}} {{IPA|ca|/pəɾ/}}'], [[2], '{{a|Valencian}} {{IPA|ca|/peɾ/}}']]
+	assert process_pronunciation(pron_list, 'any') == ['{{a|Balearic|Central}} {{IPA|ca|/pəɾ/}}','{{a|Valencian}} {{IPA|ca|/peɾ/}}']
+	pron_list = [[[1], '{{cs-IPA}}']]
+	assert process_pronunciation(pron_list, 'per') == ['{{cs-IPA|per}}']
+	pron_list = [[[1], '{{audio|nl|Nl-per.ogg|Audio}}'], [[2], '{{rhymes|nl|ɛr}}']]
+	assert process_pronunciation(pron_list, 'any') == []
+	pron_list = [[[1], '{{audio|eo|Eo-per.ogg|Audio}}'], '{{eo-IPA}}']
+	assert process_pronunciation(pron_list, 'per') == ['{{eo-IPA|per}}']
+	pron_list = [[[1], '{{audio|de|De-per.ogg|Audio}}']]
+	assert process_pronunciation(pron_list, 'per') == []
+	pron_list = [[[1], '{{hu-IPA}}'], [[2], '{{audio|hu|Hu-per.ogg|Audio}}'], [[3], '{{hyphenation|hu|per}}'], [[4], '{{rhymes|hu|ɛr}}']]
+	assert process_pronunciation(pron_list, 'per') == ['{{hu-IPA|per}}']
+	pron_list = [[[1], '{{IPA|io|/per/|/pɛɾ/}}']]
+	assert process_pronunciation(pron_list, 'per') == ['{{IPA|io|/per/|/pɛɾ/}}']
+	pron_list = [[[1], '{{la-IPA}}']]
+	assert process_pronunciation(pron_list, 'per') == ['{{la-IPA|per}}']
+test_process_pronunciations()
+
+pos_ignore_templates = ['non-gloss definition', 'categorize', 'topics', 'categoryboiler', 'categoryTOC-radical', 'catfix',
+ 'catlangname', 'dablink', 'dervcat', 'dialectboiler', 'etyboiler', 'module cat', 'parent-only', 'regionalboiler',
+ 'cattoc', 'defdate']
+pos_no_standalone_templates = ['lb'];
+# Definitely keep, these connect us to other words
+pos_useful_templates = ['inflection of', 'alt form'] 
 
 
-def compact(text):
-	# if "==Zazaki==" in text: print(text)
+def process_pos(pos_list: list): 
+	pos = [] # remove lines that don't have anything to do with pronunciation
+	for i, line in enumerate(pos_list):
+
+		if type(line) != str and len(line[0]) > 1: continue # ignore nested bullets
+
+		# get the text for the line
+		pos_text = line if type(line) == str else line[1]
+
+		# ignore starting line when it is just a description of the part of speech
+		if i == 0:
+			try:
+				starting_line = re.sub(r"\(.*\)", "", pos_text).strip()
+			except:
+				print(pos_list)
+				raise Exception()
+			if starting_line[:2]=='{{' and starting_line[-2:]=='}}': 
+				continue
+		
+
+
+		line_pos_templates = [ pos_text[f[0]:f[1]] for f in findMatchingBraces(pos_text)]
+
+		# ignore templates first 
+		for i, line_pos_template in enumerate(line_pos_templates):
+			parts = splitParts(line_pos_template[2:-2])
+			if parts[0] in pos_ignore_templates:
+				pos_text = pos_text.replace(line_pos_template, '')
+
+		# get rid of standalones next
+		for i, line_pos_template in enumerate(line_pos_templates):
+			parts = splitParts(line_pos_template[2:-2])
+			if parts[0] in pos_no_standalone_templates and pos_text.strip() == line_pos_template:
+				pos_text = pos_text.replace(line_pos_template, '')
+
+		pos_text = re.sub(r'\(\s*\)', '', pos_text).strip() # remove empty parens
+		pos_text = re.sub(r'[\.;,:]$', '', pos_text).strip() # remove trailing puncuation
+
+		if pos_text:
+			pos.append(pos_text)
+
+	return pos
+
+def test_process_pos():
+	pos_list = ['{{en-prep}}', [[1], 'For each.'], [[1, 1], '{{ux|en|Admission is £10 per person.}}'], [[1, 2], '{{ux|en|miles per gallon}}'], [[1, 3], '{{ux|en|beats per minute}}'], [[1, 4], '{{ux|en|$2.50 per dozen}}'], [[2], 'To each, in each ({{non-gloss definition|used in expressing ratios of units}}).'], [[2, 1], '{{ux|en|12 inches per foot}}'], [[2, 2], '{{ux|en|100 centimeters per meter}}'], [[3], '{{lb|en|medicine}} By the, by means of the, via the, through the.'], [[3, 1], '{{ux|en|Introduce the endoscope per nasum.}}'], [[3, 2], '{{ux|en|The medication is to be administered per os.}}'], [[4], 'In accordance with.'], [[4, 1], '{{ux|en|I parked my car at the curb per your request.}}'], [[4, 2], '{{ux|en|Implement a program that computes the approximate grade level needed to comprehend some text, per the below.}}'], [[4, 3], '{{ux|en|Note that while the walkthrough illustrates that words may be separated by more than one space, you may assume, per the specifications above, that no sentences will contain more than one space in a row.}}']]
+	assert process_pos(pos_list) == ['For each','To each, in each','{{lb|en|medicine}} By the, by means of the, via the, through the','In accordance with']
+	pos_list = ['{{en-pron|desc=third-person singular, gender-neutral, nominative case|accusative|per|possessive adjective|pers|possessive noun|pers|reflexive|perself}}', [[1], '{{lb|en|rare}} They {{qualifier|singular}}. {{non-gloss definition|Gender-neutral neologistic third-person singular subject pronoun, coordinate with gendered pronouns {{m|en|he}} and {{m|en|she}}.}}'], [[1, 1], '1997 April 22, "Anthony and Joy Hilbert" (username), "ASB: Info PDQ please re local group rules", in alt.sex.bondage, "Usenet":'], [[1, 1, 1], "This is the same place the Houghtons came from? The place where someone we interacted with thought of going into law as a profession, decided per couldn't because per was a bdsmer, and most of the USAmerican bdsmers per was discussing it with agreed with per?"], [[2], '{{lb|en|rare}} Them {{qualifier|singular}} {{non-gloss definition|Neologistic gender-neutral third-person singular object pronoun, suggested for use in place of {{m|en|him}} and {{m|en|her}}.}}'], [[2, 1], '1997 April 22, "Anthony and Joy Hilbert" (username), "ASB: Info PDQ please re local group rules", in alt.sex.bondage, "Usenet":'], [[2, 1, 1], "This is the same place the Houghtons came from? The place where someone we interacted with thought of going into law as a profession, decided per couldn't because per was a bdsmer, and most of the USAmerican bdsmers per was discussing it with agreed with per?"], [[2, 2], '{{quote-web'], [[2, 3], '{{quote-book']]
+	assert process_pos(pos_list) == ['{{lb|en|rare}} They {{qualifier|singular}}', '{{lb|en|rare}} Them {{qualifier|singular}}']
+	pos_list = ['{{en-adj|-}}', [[1], '{{lb|en|rare}} Belonging to per, their {{qualifier|singular}}. {{non-gloss definition|Gender-neutral third-person singular possessive adjective, coordinate with gendered {{m|en|his}} and {{m|en|her}}.}}'], [[1, 1], '{{quote-book']]
+	assert process_pos(pos_list) == ['{{lb|en|rare}} Belonging to per, their {{qualifier|singular}}']
+	pos_list = ['{{head|rup|noun}}', [[1], 'hair']]
+	assert process_pos(pos_list) == ['hair']
+	pos_list = ['{{head|rup|noun}}', [[1], 'pear tree']]
+	assert process_pos(pos_list) == ['pear tree']
+	pos_list = ['{{head|ast|preposition}}', [[1], 'by means of, by way of, by'], [[2], 'for'], [[2, 1], '{{ux|ast|per trés díes|for three days}}'], [[3], 'through']]
+	assert process_pos(pos_list) == ['by means of, by way of, by', 'for', 'through']
+	pos_list = ['{{br-noun|f|s=perenn}}', [[1], 'pears']]
+	assert process_pos(pos_list) == ['pears']
+	pos_list = ['{{br-noun|m|p=perioù}}', [[1], 'cauldron']]
+	assert process_pos(pos_list) == ['cauldron']
+	pos_list = ['{{head|ca|preposition}}', [[1], 'Through, via: {{non-gloss definition|used in indicating the medium through which passage occurs.}}'], [[2], 'At, during, in: {{non-gloss definition|used in indicating the time at which an event occurs.}}'], [[3], 'During, for: {{non-gloss definition|used in indicating the duration of time for which an event occurs.}}'], [[4], 'Because, because of: {{non-gloss definition|used in indicating the reason an action was undertaken.}}'], [[5], '{{lb|ca|when followed by a verbal noun}} {{non-gloss definition|Used in indicating the activity one intends to do because of an action.}}'], [[5, 1], '{{ux|ca|El meu germà anirà a Tahití per vacar a la platja.|My brother will go to Tahiti (in order) to vacation on the beach.}}'], [[6], 'By: {{non-gloss definition|used in indicating the agent responsible for an action.}}'], [[7], 'For each; for every.'], [[8], 'A, for, per: {{non-gloss definition|used in indicating a rate of exchange.}}']]
+	assert process_pos(pos_list) == ['Through, via','At, during, in','During, for','Because, because of','By','For each; for every','A, for, per']
+	pos_list = ['{{cim-noun|m}}', [[1], '{{lb|cim|Luserna}} bear']]
+	assert process_pos(pos_list) == ['{{lb|cim|Luserna}} bear']
+	pos_list = ['{{cim-noun|n|pern}}', [[1], '{{lb|cim|Luserna}} berry']]
+	assert process_pos(pos_list) == ['{{lb|cim|Luserna}} berry']
+	pos_list = ['{{head|kw|noun|g=f|singulative|peren}}', [[1], 'pears'], '{{topics|kw|Fruits}}']
+	assert process_pos(pos_list) == ['pears']
+	pos_list = ['{{cs-verb-form}}', [[1], '{{inflection of|cs|prát||2|s|impr}}']]
+	assert process_pos(pos_list) == ['{{inflection of|cs|prát||2|s|impr}}']
+	pos_list = ['{{head|da|preposition}} (abbreviated pr.)', [[1], 'For each; for every'], [[1, 1], '{{ux|da|Motoren roterer 1000 gange per minut.|The engine rotates 1000 times per minute.}}']]
+	assert process_pos(pos_list) == ['For each; for every']
+	pos_list = ['{{head|nl|preposition}}', [[1], 'For each; for every; per'], [[1, 1], '{{ux|nl|De motor draait 1000 toeren per minuut.|The engine goes 1000 revolutions per minute.}}'], [[2], 'by means of'], [[2, 1], '{{ux|nl|Kom je per auto of per spoor?|Are you coming by car or by rail?}}']]
+	assert process_pos(pos_list) == ['For each; for every; per', 'by means of']
+	pos_list = ['{{eo-prep}}', [[1], 'by means of, with'], [[1, 1], '{{ux|eo|Li skribis per plumo.|He wrote with a pen.}}']]
+	assert process_pos(pos_list) == ['by means of, with']
+	pos_list = ['{{hu-noun|ek}}', [[1], '{{lb|hu|law}} action, suit, lawsuit'], [[1, 1], '{{syn|hu|eljárás|kereset}}']]
+	assert process_pos(pos_list) == ['{{lb|hu|law}} action, suit, lawsuit']
+	pos_list = ['{{id-noun|head=pèr}}', [[1], '{{l|en|spring}}, a mechanical device made of flexible or coiled material that exerts force and attempts to spring back when bent, compressed, or stretched.'], [[1, 1], '{{syn|id|pegas}}'], [[2], '{{lb|id|colloquial}} {{l|en|arc lamp}}.'], [[2, 1], '{{syn|id|bohlam|bola lampu listrik|lampu busur}}']]
+	assert process_pos(pos_list) == ['{{l|en|spring}}, a mechanical device made of flexible or coiled material that exerts force and attempts to spring back when bent, compressed, or stretched', '{{lb|id|colloquial}} {{l|en|arc lamp}}']
+	pos_list = ['{{lt-prep|a}}', [[1], 'through'], [[2], 'during']]
+	assert process_pos(pos_list) == ['through', 'during'] 
+	pos_list = ['{{head|enm|noun}}', [[1], '{{alt form|enm|pere|id=bridge pillar|t=bridge pillar}}']]
+	assert process_pos(pos_list) == ['{{alt form|enm|pere|id=bridge pillar|t=bridge pillar}}']
+	pos_list = ['{{mhn-noun|n}}', [[1], 'berry']]
+	assert process_pos(pos_list) == ['berry']
+	pos_list = ['{{head|nb|preposition}} (abbreviated pr.)', [[1], 'For each, for every, {{l|en|per}}.'], [[1, 1], '{{ux|nb|Motoren roterer 1000 ganger per minutt.|inline=1|The engine rotates 1000 times per minute.}}'], [[1, 2], '{{ux|nb|per porsjon|inline=1|for each portion}}'], [[1, 3], '{{ux|nb|per dag|inline=1|per day}}']]
+	assert process_pos(pos_list) == ['For each, for every, {{l|en|per}}']
+test_process_pos()
+
+def compact(text, page_title, reconstructed_language):
 	"""Deal with headers, lists, empty sections, residuals of tables.
 	:param text: convert to HTML.
 	:return data: a dictionary of the Languages, Etymologies and Pronunciations
 	"""
 
-	page = []			  # list of paragraph
-	headers = {}		  # Headers for unfilled sections
+	page = []						  # list of paragraph
+	language = None
+	headers = {}			  # Headers for unfilled sections
 	emptySection = False  # empty sections are discarded
-	listLevel = []		  # nesting of lists
-	listCount = []		  # count of each list (it should be always in the same length of listLevel)
-	nodeClass = None # For knowing how to handle it
+	listLevel = []			  # nesting of lists
+	listCount = []			  # count of each list (it should be always in the same length of listLevel)
+	node_class = None # For knowing how to handle it
+
 	data = {} # return dictionary
 	for line in text.split('\n'):
-		if not line:			# collapse empty lines
+		if not line:					# collapse empty lines
 			# if there is an opening list, close it if we see an empty line
 			if len(listLevel):
-				page.append(line)
-				if options.toHTML:
-					for c in reversed(listLevel):
-						page.append(listClose[c])
 				listLevel = []
 				listCount = []
-				emptySection = False
-			elif page and page[-1]:
-				page.append('')
 			continue
 		# Handle section titles
 		m = section.match(line)
 		if m:
-			title = m.group(2)
-			node_class = re.sub('_\d+| \d+', '', title).lower() #removed '_x' info
+			section_title = m.group(2)
 			lev = len(m.group(1)) # header level
-			# if title and title[-1] not in '!?':
-				# title += '.'	# terminate sentence.
-			headers[lev] = title
-			# drop previous headers
-			for i in list(headers.keys()):
-				if i > lev:
-					del headers[i]
+			headers[lev] = section_title
+			for i in list(headers.keys()): # drop previous headers
+				if i > lev: del headers[i]
+
+			node_class = re.sub('_\d+| \d+', '', section_title).lower() #removed '_x' info
+
+			if lev == 2:
+				node_class = None # dont use node_class for languages
+				language = section_title
+				data[language] = [{}] # language entries
+				entryNumber = 1 # entries start at 1 to match wiktionary
+#							  logging.debug(f'Evaluating language: {language}')
+			elif lev == 3:
+				# If there is no language: e.g. Reconstruction:Gaulish/Katumāros thhen try to use the language of the page_title
+				if not language and reconstructed_language:
+					language = reconstructed_language
+
+				# This skips alternative forms
+				if node_class == 'etymology':
+					# Assume etymology sections are the start of a new entry
+					if 'etymology' in data[language][-1]:
+						data[language].append({})
+				elif node_class == 'pronunciation':
+					pass
+				elif node_class in all_pos:
+					pass
+				else:
+					node_class = None
+			else: # pos is usually 4
+				if node_class in all_pos:
+					pass
+				else:
+					node_class = None
+#								  logging.debug(f'skipping node_class: {node_class}')
+#							  logging.debug(f'Evaluating node_class: {node_class}')
+
 			emptySection = True
 			listLevel = []
 			listCount = []
-			continue
-		# Handle page title
-		elif line.startswith('++'):
-			title = line[2:-2]
-			if title:
-				data.append({title: {}})
-		# handle indents
-		elif line[0] == ':':
-			# page.append(line.lstrip(':*#;'))
-			continue
 		# handle lists
-		elif line[0] in '*#;:':
-			i = 0
-			# c: current level char
-			# n: next level char
-			for c, n in zip_longest(listLevel, line, fillvalue=''):
-				if not n or n not in '*#;:': # shorter or different
-					if c:
-						if options.toHTML:
-							page.append(listClose[c])
-						listLevel = listLevel[:-1]
-						listCount = listCount[:-1]
-						continue
-					else:
-						break
-				# n != ''
-				if c != n and (not c or (c not in ';:' and n not in ';:')):
-					if c:
-						# close level
-						if options.toHTML:
-							page.append(listClose[c])
-						listLevel = listLevel[:-1]
-						listCount = listCount[:-1]
-					listLevel += n
-					listCount.append(0)
-					if options.toHTML:
-						page.append(listOpen[n])
-				i += 1
-			n = line[i - 1]  # last list char
-			line = line[i:].strip()
-			if line:  # FIXME: n is '"'
-				if options.keepLists:
-					if options.keepSections:
-						# emit open sections
-						items = sorted(headers.items())
-						for _, v in items:
-							page.append("Section::::" + v)
-					headers.clear()
-					# use item count for #-lines
-					listCount[i - 1] += 1
-					bullet = 'BULLET::::%d. ' % listCount[i - 1] if n == '#' else 'BULLET::::- '
-					page.append('{0:{1}s}'.format(bullet, len(listLevel)) + line)
-				elif options.toHTML:
-					if n not in listItem: 
-						n = '*'
-					page.append(listItem[n] % line)
-		elif len(listLevel):
-			listLevel = []
-			listCount = []
-			page.append(line)
 
 		# Drop residuals of lists
 		# DGN this is where a lot of the templates were being dropped
-		elif (line[0] in '{|' and line[0:2] != '{{') or (line[-1] == '}' and line[-2:] != '}}'):
-			continue
-		# Drop irrelevant lines
-		elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
-			continue
-		elif len(headers):
-			
-			for 
-			if options.keepSections:
-				items = sorted(headers.items())
-				for i, v in items:
-					page.append("Section::::" + v)
-			headers.clear()
-			page.append(line)  # first line
-			emptySection = False
-		elif not emptySection:
-			# Drop preformatted
-			if line[0] != ' ':	# dangerous
-				page.append(line)
-	return page
+		elif (line[0] in '{|' and line[0:2] != '{{') or (line[-1] == '}' and line[-2:] != '}}'): continue
 
+		elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '': continue # Drop irrelevant lines
+
+		# Add text to the system
+		elif language != None and node_class != None:
+			# Here is {{also|Per|PER|pêr|për|per-}} when there is no language
+			if line[0] in '*#;:':
+				i = 0
+				for c, n in zip_longest(listLevel, line, fillvalue=''): # cur, next level char
+					if not n or n not in '*#;:': # shorter or different
+						if c:
+							listLevel = listLevel[:-1]
+							listCount = listCount[:-1]
+							continue
+						else:
+							break
+					# n != ''
+					if c != n and (not c or (c not in ';:' and n not in ';:')):
+						if c:
+								# close level
+							listLevel = listLevel[:-1]
+							listCount = listCount[:-1]
+						listLevel += n
+						listCount.append(0)
+					i += 1
+				n = line[i - 1]  # last list char
+				line = line[i:].strip()
+
+				if line:  # FIXME: n is '"'
+					listCount[i - 1] += 1
+					data[language][-1].setdefault(node_class, []).append([[*listCount], line]) # shallow copy
+			else:
+				data[language][-1].setdefault(node_class, []).append(line)
+
+	for language, language_entries in data.items():
+		# Handle the post-processing of the other sections before transitioning away
+		for entry_number, entry in enumerate(language_entries):
+			for key, value in entry.items():
+				if key == 'etymology': 
+					data[language][entry_number]['etymology'] = process_etymology(data[language][entry_number]['etymology'])
+				elif key == 'pronunciation': 
+					data[language][entry_number]['pronunciation'] = process_pronunciation(data[language][entry_number]['pronunciation'], page_title)
+				elif key in all_pos: 
+					data[language][entry_number][key] = process_pos(data[language][entry_number][key])
+
+	return data
 
 def handle_unicode(entity):
 	numeric_code = int(entity[2:-1])
@@ -3299,6 +3469,50 @@ def main():
 
 	process_dump(input_file, args.templates, output_path, file_size,
 				 args.compress, args.processes)
+
+def manual_main(input_file, output_path, processes=1):
+
+	class args: pass
+	args.bytes = '1M'
+	try:
+		power = 'kmg'.find(args.bytes[-1].lower()) + 1
+		file_size = int(args.bytes[:-1]) * 1024 ** power
+		if file_size < minFileSize:
+			raise ValueError()
+	except ValueError:
+		logging.error('Insufficient or invalid size: %s', args.bytes)
+		return
+
+	options.acceptedNamespaces=['w', 'wiktionary', 'wikt', 'Reconstruction']
+	options.debug=False
+	options.discardElements=['gallery', 'timeline', 'noinclude', 'pre', 'table', 'tr', 'td', 'th', 'caption', 'div', 'form', 'input', 'select', 'option', 'textarea', 'ul', 'li', 'ol', 'dl', 'dt', 'dd', 'menu', 'dir', 'ref', 'references', 'img', 'imagemap', 'source', 'small', 'sub', 'sup', 'indicator']
+	options.escape_doc=False
+	options.expand_templates=False
+	options.filter_category_exclude=set()
+	options.filter_category_include=set()
+	options.filter_disambig_pages=False
+	options.ignored_tag_patterns=[(re.compile('<abbr\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*abbr>', re.IGNORECASE)), (re.compile('<b\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*b>', re.IGNORECASE)), (re.compile('<big\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*big>', re.IGNORECASE)), (re.compile('<blockquote\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*blockquote>', re.IGNORECASE)), (re.compile('<center\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*center>', re.IGNORECASE)), (re.compile('<cite\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*cite>', re.IGNORECASE)), (re.compile('<em\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*em>', re.IGNORECASE)), (re.compile('<font\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*font>', re.IGNORECASE)), (re.compile('<h1\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*h1>', re.IGNORECASE)), (re.compile('<h2\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*h2>', re.IGNORECASE)), (re.compile('<h3\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*h3>', re.IGNORECASE)), (re.compile('<h4\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*h4>', re.IGNORECASE)), (re.compile('<hiero\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*hiero>', re.IGNORECASE)), (re.compile('<i\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*i>', re.IGNORECASE)), (re.compile('<kbd\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*kbd>', re.IGNORECASE)), (re.compile('<p\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*p>', re.IGNORECASE)), (re.compile('<plaintext\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*plaintext>', re.IGNORECASE)), (re.compile('<s\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*s>', re.IGNORECASE)), (re.compile('<span\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*span>', re.IGNORECASE)), (re.compile('<strike\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*strike>', re.IGNORECASE)), (re.compile('<strong\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*strong>', re.IGNORECASE)), (re.compile('<tt\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*tt>', re.IGNORECASE)), (re.compile('<u\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*u>', re.IGNORECASE)), (re.compile('<var\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*var>', re.IGNORECASE)), (re.compile('<a\\b.*?>', re.IGNORECASE|re.DOTALL), re.compile('</\\s*a>', re.IGNORECASE))]
+	options.keepLinks=False
+	options.keepLists=True
+	options.keepSections=True
+	options.keep_tables=False
+	options.knownNamespaces={'Template': 10}
+	options.log_file=None
+	options.min_text_length=0
+	options.moduleNamespace=''
+	options.print_revision=False
+	options.quiet=False
+	options.redirects={}
+	options.templateCache={}
+	options.templateNamespace=''
+	options.templatePrefix=''
+	options.templates={}
+	options.toHTML=False
+	options.urlbase=''
+	options.write_json=True
+
+	process_dump(input_file, False, output_path, file_size, False, processes)
+
 
 def createLogger(quiet, debug, log_file):
 	logger = logging.getLogger()
