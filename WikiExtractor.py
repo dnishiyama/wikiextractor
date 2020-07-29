@@ -2573,11 +2573,6 @@ pron_templates = ['ain-IPA', 'ang-IPA', 'ar-IPA', 'as-IPA', 'audio-IPA', 'be-IPA
 #  'U:en:non-rhotic rhymes',
 #  'x2rhymes',
 
-def shortenTemplate(template):
-	parts = splitParts(template[2:-2])
-	longest_part = max(range(len(parts)), key=lambda x: len(parts[x])); longest_part
-	return makeTemplateFromParts([s for i, s in enumerate(parts) if i != longest_part])
-
 def makeTemplateFromParts(template_parts:list):
 	return '{{' + '|'.join(template_parts) + '}}'
 
