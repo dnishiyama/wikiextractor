@@ -2422,7 +2422,11 @@ def replaceInternalLinks(text):
 
 def makeInternalLink(title, label):
 	colon = title.find(':')
-	if colon > 0 and title[:colon] not in options.acceptedNamespaces:
+	namespace = title[:colon].lower()
+	if colon > 0 and namespace not in options.acceptedNamespaces:
+		# Not debugging unless I want to add more that will be dropped (to identify them)
+		#if namespace not in ['appendix', 'category', 'image', 'file', 'module', 'wikiquote', 's', 'd', 'commons', 'special', 'index']: #ignoring these
+		#	logging.warning(f'unaccepted options.acceptedNamespaces: "{title[:colon]}" of "{title}"')
 		return ''
 	if colon == 0:
 		# drop also :File:
