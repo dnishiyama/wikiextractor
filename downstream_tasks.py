@@ -1,5 +1,5 @@
 from dgnutils import *
-from WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested
+from WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from
 
 # {{{ WIKTIONARY TEMPLATE PARSING
 
@@ -305,7 +305,7 @@ def parseTemplates(template, session=None, quote=True, cache=False, resetCache=F
 def getHtmlText(html):
 	"""Get the html via BS4 and then drop tables"""
 	soup = bs4.BeautifulSoup(html, features="lxml")
-	removeable_elements = soup.find_all("table", {'class':'metadata'}) + soup.find_all("div", {'class':'noprint'})
+	removeable_elements = soup.find_all("table", {'class':'metadata'}) + soup.find_all("div", {'class':'noprint'}) + soup.find_all('div', {'class':'NavFrame'})
 	for element in removeable_elements: 
 		element.decompose()
 	text = soup.get_text()
@@ -405,10 +405,32 @@ def wikitext_is_connection_forming(wikitext):
 		return True
 	return False
 
+RE_REQUEST_TEMPLATE = r'rf[0-9a-z- ]+'
+REQUEST_TEMPLATES = ['MW1913Abbr', 'Nuttall', 'USRegionDisputed', 'Webster 1913', 'ase-rfr', 'attention', 'beer', 'broken ref', 'checksense', 'copyvio suspected', 'delete', 'etystub', 'look', 'merge', 'missing template', 'move', 'split', 'stub entry', 't-needed', 'tbot entry', 'tea room', 'tea room sense', 'ttbc', 'defaults to und', 'unblock']
+
+def wikitext_is_excluded(wikitext):
+	"""
+	Determines if wikitext should be ignored and replaced with '' """
+	parts = splitParts(wikitext[2:-2])
+	title = parts[0]
+	if title in ['LDL', ]:
+		return True
+
+	# If there is a 'en-noun' or other tag, ignore these
+	if re.match(r'\w{2,3}-(?:verb|noun|adj|adv|decl|conj|proper|infl|adecl|pos|latin|gal)(?:$| .*|-.*|/.*)', title):
+		return True
+
+	if title in REQUEST_TEMPLATES or re.match(RE_REQUEST_TEMPLATE, title):
+		return True
+	return False
+
 def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_connection_forming=False):
 	logging.debug('Generating list of used wikitexts...')
 	wikitext_replacement_dict = {}
 	wikitext_list = set(s[s_i[0]:s_i[1]] for s in sentences for s_i in findMatchingBraces(s)) 
+
+	# Exclude some wikitexts (e.g. LDL, en-noun)
+	wikitext_list = set(w for w in wikitext_list if not wikitext_is_excluded(w))
 
 	# Exclude connection forming here (when doing REST lookups) and at end (when replacing them)
 	if exclude_connection_forming:
@@ -470,8 +492,7 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_con
 			results = trio.run(get_wikitext_async, wikitext_groupings[step*batch_size:(step+1)*batch_size]); results;
 			print(f'{len(results)} results')
 			wikitext_replacement_dict.update({r[0]: r[1] for r in results})
-			time.sleep(3)
-
+			if step != steps-1: time.sleep(1)
 			if cache_file:
 				logging.info('Saving cache file')
 				with open(cache_file, 'wb+') as f:
@@ -656,7 +677,16 @@ class WikiProcessor(object):
 	"""
 	An extraction task on a article.
 	"""
-	def __init__(self, directory, channel='dev', cache_dir=None, output_dir=None, store_intermediates=False):
+	def __init__(
+			self, 
+			directory, 
+			channel='dev', 
+			cache_dir='input/', 
+			output_dir='output/', 
+			input_dir='input/', 
+			dump_file_name='enwiktionary-latest-pages-articles.xml',
+			store_intermediates=False,
+	):
 		"""
 		:param channel: The channel of etymology_explorer to run this on. Should usually be dev or test. Options are `test`, `dev`, `staging`, `prod`
 		:param cache_dir: caches for the wikitext template expansions
@@ -665,11 +695,14 @@ class WikiProcessor(object):
 		"""
 		if cache_dir and cache_dir[-1] != '/': raise Exception('`Cache_dir` must end in `/` if provided')
 		if output_dir and output_dir[-1] != '/': raise Exception('`Output_dir` must end in `/` if provided')
+		if input_dir and input_dir[-1] != '/': raise Exception('`Input_dir` must end in `/` if provided')
 		if directory[-1] != '/': raise Exception('`directory` must end in `/` ')
 
 		self.store_intermediates = store_intermediates
-		self.cache_dir = cache_dir if cache_dir else directory+'input/'
-		self.output_dir = output_dir if output_dir else directory+'output/'
+		self.cache_path = directory+cache_dir if cache_dir else None
+		self.output_path = directory+output_dir if output_dir else None
+		self.input_path = directory+input_dir if input_dir else None
+		self.dump_file_name = dump_file_name
 		self.channel = channel
 		self.test = self.channel == 'test'
 
@@ -684,9 +717,8 @@ class WikiProcessor(object):
 		self.conn, self.cursor = connect(self.database, user=u, password=p, host=h)
 
 	def load_language_dict(self):
-		language_dict = {s['language_code']:s['language_name'] for s in self.cursor.d('SELECT * FROM languages WHERE key_language=1')};
-		language_dict.update(MISSING_LANG_DICT)
-		self.language_dict = language_dict
+		self.language_dict = {s['language_code']:s['language_name'] for s in self.cursor.d('SELECT * FROM languages WHERE key_language=1')};
+		self.language_dict.update(MISSING_LANG_DICT)
 
 	def load_wl_2_id_values(self):
 		""" Returns wl_2_id, next_wl_2_id, and unmatched_words, all needed for getOrCreateIdWithDict """
@@ -714,8 +746,8 @@ class WikiProcessor(object):
 
 		# Actual process for processing the wikidump
 		processed_wikidump = self.load_wikidump_etymologies() # get word, etymology, def, etc from AA/wiki_00 etc
-		all_entries_data, self.en_dict = self.create_and_insert_mysql_entries(processed_wikidump) # no cache
-		wikitext_part_array = self.get_wikitext_part_array(all_entries_data) # 
+		en_etys_dl, self.en_dict = self.create_and_insert_mysql_entries(processed_wikidump) # no cache
+		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
 		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
 		node_connections = self.get_nodes_from_connections(all_connections)
 		roots, descs, table_sources, entry_numbers = self.get_mysql_data_from_nodes(node_connections)
@@ -736,6 +768,23 @@ class WikiProcessor(object):
 		logging.debug(node_conns)
 		return node_conns
 
+	def get_processed_wikidump_from_single_word(self, word):
+		processed_wikidump = {}
+		text = get_wikidump_text(word, filename=self.input_path+self.dump_file_name); text[:50]
+		e = Extractor(0, 0, word, text); e
+		text = e.transform(text); text
+		text = e.wiki2text(text); text
+		data = compact(e.clean(text), e.title, e.reconstructed_language); data
+		processed_wikidump[word] = data
+		return processed_wikidump
+
+	def get_processed_text_from_single_word(self, word):
+		processed_wikidump = self.get_processed_wikidump_from_single_word(word)
+		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl = self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
+
+		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
+		return en_prons_dl, en_etys_dl, en_defs_dl
+
 	def load_wikidump_etymologies(self):
 		"""
 		Get the word, etymology, definitions, etc from the wikiextractor-processed wiktionary articles
@@ -746,13 +795,13 @@ class WikiProcessor(object):
 		
 		letters = [chr(a)+chr(b) for a in range(65,88) for b in range(65,88) ]; letters
 		if self.test: letters=['AA']
-		logging.info(f'Processing wikiextractor directory {self.output_dir}')
+		logging.info(f'Processing wikiextractor directory {self.output_path}')
 		for d in letters:
 			logging.debug(f'Processing wikiextractor directory: {d}')
 			try:
 				for num in [f'{i}{j}' for i in range(10) for j in range(10)]:
 					if self.test and num != '00': continue
-					path = f'{self.output_dir}{d}/wiki_{num}'
+					path = f'{self.output_path}{d}/wiki_{num}'
 
 					with open(path) as f:
 						for entry in f.readlines():
@@ -776,6 +825,39 @@ class WikiProcessor(object):
 		if self.store_intermediates: self.processed_wikidump = processed_wikidump
 		return processed_wikidump
 
+	def parse_wikitext_all(self, en_prons_dl, en_etys_dl, en_defs_dl):
+		parsed_pronunciations = multi_parse_wikitext_sentences(
+			[e['pronunciation'] for e in en_prons_dl], 
+			cache_file=self.cache_path+'pron.wik' if self.cache_path else None,
+		)
+		en_prons_dl = [{**z[0], 'pronunciation':z[1]} for z in zip(en_prons_dl, parsed_pronunciations)]
+
+		parsed_etymologies_except_conns = multi_parse_wikitext_sentences(
+			[e['wikitext'] for e in en_etys_dl], 
+			cache_file=self.cache_path+'ety.wik' if self.cache_path else None,
+			exclude_connection_forming=True,
+		)
+		en_etys_dl = [{**z[0], 'wikitext':z[1]} for z in zip(en_etys_dl, parsed_etymologies_except_conns)]
+
+		parsed_etymologies = multi_parse_wikitext_sentences(
+			[e['wikitext'] for e in en_etys_dl], 
+			cache_file=self.cache_path+'ety.wik' if self.cache_path else None,
+			exclude_connection_forming=False,
+		)
+		en_etys_dl = [{**z[0], 'etymology':z[1]} for z in zip(en_etys_dl, parsed_etymologies)]
+
+		parsed_definitions = multi_parse_wikitext_sentences(
+			[e['definition'] for e in en_defs_dl], 
+			cache_file = self.cache_path + 'def.wik' if self.cache_path else None
+		)
+		en_defs_dl = [{**z[0], 'definition':z[1]} for z in zip(en_defs_dl, parsed_definitions)] 
+
+		if self.store_intermediates:
+			self.en_etys_dl = en_etys_dl
+			self.en_prons_dl = en_prons_dl
+			self.en_defs_dl = en_defs_dl
+		return en_prons_dl, en_etys_dl, en_defs_dl
+
 	def create_and_insert_mysql_entries(self, processed_wikidump):
 		""" 
 		creates the mysql formatted data from processed wikidump, and removes wikitext
@@ -783,85 +865,62 @@ class WikiProcessor(object):
 		"""
 		
 		logging.info(f'Creating mysql data to insert')
-		entry_connections_dict_list, \
-			entry_etymologies_dict_list, \
-			entry_pos_dict_list, \
-			entry_pronunciations_dict_list, \
-			entry_definitions_dict_list, \
-			etymologies_dict_list, \
-			all_entries_data = self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
+		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl = self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
 		if self.store_intermediates:
-			self.entry_etymologies_dict_list = entry_etymologies_dict_list
-			self.entry_pos_dict_list = entry_pos_dict_list
-			self.entry_pronunciations_dict_list = entry_pronunciations_dict_list
-			self.entry_definitions_dict_list = etymologies_dict_list
-			self.etymologies_dict_list = etymologies_dict_list
+			self.en_etys_dl = en_etys_dl
+			self.en_pos_dl = en_pos_dl
+			self.en_prons_dl = en_prons_dl
+			self.en_defs_dl = en_defs_dl
+			self.etys_dl = etys_dl
 
 
 		logging.info(f'Converting wikitext into text...')
-		
-		parsed_pronunciations = multi_parse_wikitext_sentences(
-			[e['pronunciation'] for e in entry_pronunciations_dict_list], 
-			cache_file=self.cache_dir+'pron.wik' if self.cache_dir else None,
-		)
-		entry_pronunciations_dict_list = [{**z[0], 'pronunciation':z[1]} for z in zip(entry_pronunciations_dict_list, parsed_pronunciations)]
 
-		parsed_etymologies_except_conns = multi_parse_wikitext_sentences(
-			[e['wikitext'] for e in entry_etymologies_dict_list], 
-			cache_file=self.cache_dir+'ety.wik' if self.cache_dir else None,
-			exclude_connection_forming=True,
-		)
-		entry_etymologies_dict_list = [{**z[0], 'wikitext':z[1]} for z in zip(entry_etymologies_dict_list, parsed_etymologies_except_conns)]
+		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
 
-		parsed_etymologies = multi_parse_wikitext_sentences(
-			[e['wikitext'] for e in entry_etymologies_dict_list], 
-			cache_file=self.cache_dir+'ety.wik' if self.cache_dir else None,
-			exclude_connection_forming=False,
-		)
-		entry_etymologies_dict_list = [{**z[0], 'etymology':z[1]} for z in zip(entry_etymologies_dict_list, parsed_etymologies)]
-
-		parsed_definitions = multi_parse_wikitext_sentences(
-			[e['definition'] for e in entry_definitions_dict_list], 
-			cache_file = self.cache_dir + 'def.wik' if self.cache_dir else None
-		)
-		entry_definitions_dict_list = [{**z[0], 'definition':z[1]} for z in zip(entry_definitions_dict_list, parsed_definitions)] 
 		logging.info(f'Done converting wikitext into text...')
 
 		logging.debug(f'Generating 2_id dicts for connection making...')
-		en_dict = {e['entry_id']:e['entry_number'] for e in entry_connections_dict_list}
+		en_dict = {e['entry_id']:e['entry_number'] for e in en_conns_dl}
+
+		self.insert_mysql_entries(en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl)
+
+		return en_etys_dl, en_dict #en_etys_dl is already stored in self, same with en_dict
+
+
+	def insert_mysql_entries(self, en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl):
+		logging.info(f'Removing empty items...')
+		en_defs_dl = [e for e in en_defs_dl if e['definition'] != '']
 
 		logging.info(f'Inserting data into mysql...')
 
 		logging.debug(f'Inserting entry_etymologies into mysql...')
-		self.cursor.dict_insert(entry_etymologies_dict_list, 'entry_etymologies')
+		ety_cols = ['entry_id', 'wikitext', 'etymology'] # need to restrict since more are passed along
+		self.cursor.dict_insert([{k:v for k,v in e.items() if k in ety_cols} for e in en_etys_dl], 'entry_etymologies')
 
 		logging.debug(f'Inserting entry_connections into mysql...')
-		self.cursor.dict_insert(entry_connections_dict_list, 'entry_connections')
+		self.cursor.dict_insert(en_conns_dl, 'entry_connections')
 
 		logging.debug(f'Inserting entry_pos into mysql...')
-		self.cursor.dict_insert(entry_pos_dict_list, 'entry_pos')
+		self.cursor.dict_insert(en_pos_dl, 'entry_pos')
 
 		logging.debug(f'Inserting entry_definitions into mysql...')
-		self.cursor.dict_insert(entry_definitions_dict_list, 'entry_definitions')
+		self.cursor.dict_insert(en_defs_dl, 'entry_definitions')
 
 		logging.debug(f'Inserting entry_pronunciations into mysql...')
-		self.cursor.dict_insert(entry_pronunciations_dict_list, 'entry_pronunciations')
-		
-		if self.store_intermediates: self.all_entries_data = all_entries_data
-		return all_entries_data, en_dict
+		self.cursor.dict_insert(en_prons_dl, 'entry_pronunciations')
 
 
 	def create_mysql_data_from_processed_wikiextraction_data(self, processed_data, log=False):
 		"""Take processed wikiextraction data and convert into data to put into mysql"""
 		entry_id = 0
 		pos_id = 0
-		all_entries_data = [] # entry data for making connections [{ '_id', 'entry_id', 'word', 'language_name', 'wikitext')}] for wl in new_word_lang_pairs]
-		entry_connections_dict_list = []; #{'etymology_id', 'entry_id', 'entry_number'}
-		entry_etymologies_dict_list = []; #{'entry_id', 'wikitext', 'etymology'}
-		entry_pos_dict_list = []; #{'entry_id', 'pos_id', 'pos_name'}
-		entry_pronunciations_dict_list = []; #{'entry_id', 'pronunciation'}
-		entry_definitions_dict_list = []; #{'pos_id', 'definition'}
-		etymologies_dict_list = []; #{'_id', 'word', 'language_name'}
+		en_conns_dl = []; #{'etymology_id', 'entry_id', 'entry_number'}
+		en_etys_dl = []; #{'entry_id', 'wikitext', 'etymology'}
+		en_pos_dl = []; #{'entry_id', 'pos_id', 'pos_name'}
+		en_prons_dl = []; #{'entry_id', 'pronunciation'}
+		en_defs_dl = []; #{'pos_id', 'definition'}
+		etys_dl = []; #{'_id', 'word', 'language_name'}
 		#last_id = max([*self.wl_2_id.values(), -1])
 
 		for i, (e_word, e_language_data) in enumerate(processed_data.items()):
@@ -872,7 +931,7 @@ class WikiProcessor(object):
 				if e_language == 'url': continue
 
 				e_id = self.getOrCreateIdWithDict(e_word, e_language)
-				etymologies_dict_list.append({'_id': e_id, 'word': e_word, 'language_name': e_language})
+				etys_dl.append({'_id': e_id, 'word': e_word, 'language_name': e_language})
 
 				entry_number = 1
 				for e_entry in e_entries:
@@ -881,39 +940,37 @@ class WikiProcessor(object):
 						if not e_ety_pos_pron: continue
 
 						if e_key == 'etymology':
-							entry_etymologies_dict_list.append({'entry_id':entry_id, 'wikitext': e_ety_pos_pron})
-							# Add all_entries_data
-							all_entries_data.append({ '_id': e_id,
+							en_etys_dl.append({ # include extra columns so this can be used in connections
+								'_id': e_id,
 								'word': e_word,
 								'language_name': e_language,
-								'entry_id': entry_id,
-								'wikitext': e_ety_pos_pron,
+								'entry_id':entry_id, 
+								'wikitext': e_ety_pos_pron
 							})
 						elif e_key == 'pronunciation':
 							for e_pron in e_ety_pos_pron:
-								entry_pronunciations_dict_list.append({'entry_id':entry_id, 'pronunciation':e_pron})
+								en_prons_dl.append({'entry_id':entry_id, 'pronunciation':e_pron})
 						else: # pos
 							for e_definition in e_ety_pos_pron:
-								entry_definitions_dict_list.append({'pos_id':pos_id,'definition':e_definition})
+								en_defs_dl.append({'pos_id':pos_id,'definition':e_definition})
 
-							entry_pos_dict_list.append({'entry_id':entry_id, 'pos_id':pos_id, 'pos_name':e_key})
+							en_pos_dl.append({'entry_id':entry_id, 'pos_id':pos_id, 'pos_name':e_key})
 							pos_id += 1
 
-					entry_connections_dict_list.append({'etymology_id':e_id,'entry_id':entry_id,'entry_number':entry_number})
+					en_conns_dl.append({'etymology_id':e_id,'entry_id':entry_id,'entry_number':entry_number})
 					entry_id += 1
 					entry_number += 1	 
-		logging.info(f'Found {len(entry_connections_dict_list)} new connections to insert')
-		logging.info(f'Found {len(entry_etymologies_dict_list)} new etymologies to insert')
-		logging.info(f'Found {len(entry_pos_dict_list)} new pos to insert')
-		logging.info(f'Found {len(entry_pronunciations_dict_list)} new pronunciations to insert')
-		logging.info(f'Found {len(entry_definitions_dict_list)} new definitions to insert')
+		logging.info(f'Found {len(en_conns_dl)} new connections to insert')
+		logging.info(f'Found {len(en_etys_dl)} new etymologies to insert')
+		logging.info(f'Found {len(en_pos_dl)} new pos to insert')
+		logging.info(f'Found {len(en_prons_dl)} new pronunciations to insert')
+		logging.info(f'Found {len(en_defs_dl)} new definitions to insert')
 
-		return entry_connections_dict_list, entry_etymologies_dict_list, entry_pos_dict_list, entry_pronunciations_dict_list, entry_definitions_dict_list, etymologies_dict_list, all_entries_data
+		return en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl
 
-	def get_wikitext_part_array(self, all_entries_data):
-		logging.info(f'Gathering wikitext parts for {len(all_entries_data)} entries...')
-		wikitext_part_array = [get_wikitext_parts_dict(entry) for entry in all_entries_data if entry['wikitext']]
-		# if del_after: del data
+	def get_wikitext_part_array(self, en_etys_dl):
+		logging.info(f'Gathering wikitext parts for {len(en_etys_dl)} entries...')
+		wikitext_part_array = [get_wikitext_parts_dict(entry) for entry in en_etys_dl if entry['wikitext']]
 		if self.store_intermediates: self.wikitext_part_array = wikitext_part_array
 		return wikitext_part_array
 
@@ -1563,7 +1620,21 @@ def get_tree_connections(tree):
 	return connections
 	
 
+def get_wikidump_text(word, filename='/Users/nish/development/git/wikiextractor/input/enwiktionary-latest-pages-articles.xml'):
+	"""
+	:param word - the word to search for
+	:param filname (optional) - the filename to search in
+	Get the text of a particular word from the enwiktionary-latest-pages-articles.xml
+	Uses pages_from of WikiExtractor
+	"""
+	with open(filename, 'r') as f:
+		for i, page_data in enumerate(pages_from(f)):
+			if i and not i % 100000: print(f'\rEvaluated {i} pages', end='')
+			id, revid, title, ns, catSet, page = page_data
+			if title == word:
+				return ''.join(page)
+				break
+	logging.error(f'Could not find word: {word}')
+	return ''
 
 # }}}
-
-

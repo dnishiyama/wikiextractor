@@ -716,10 +716,9 @@ class Extractor(object):
 		# Drop tables
 		# first drop residual templates, or else empty parameter |} might look like end of table.
 		if not options.keep_tables:
-			# This removes the templates. So let's not do it
+			# DGN: This removes the templates. So let's not do it
 			# text = dropNested(text, r'{{', r'}}')
-			# text = dropNested(text, r'{\|', r'\|}')
-			pass
+			text = dropNested(text, r'{\|', r'\|}')
 
 		# Handle bold/italic/quote
 		if options.toHTML:
@@ -807,7 +806,10 @@ class Extractor(object):
 		text = dots.sub('...', text)
 		text = re.sub(' (,:\.\)\]»)', r'\1', text)
 		text = re.sub('(\[\(«) ', r'\1', text)
-		text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)	# lines with only punctuations
+		# DGN modification on next line to allow lines with }} to stay
+		# text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)	# lines with only punctuations
+		text = re.sub(r'\n[^a-zA-Z0-9_{}]+?\n', '\n', text, flags=re.U)	# lines with only punctuations
+		text = text.replace('{{,}}', ',') # Replace templated commas. Not sure why these exist. word=head
 		text = text.replace(',,', ',').replace(',.', '.')
 		if options.keep_tables:
 			# the following regular expressions are used to remove the wikiml chartacters around table strucutures
@@ -2726,6 +2728,7 @@ test_process_pos()
 def compact(text, page_title, reconstructed_language):
 	"""Deal with headers, lists, empty sections, residuals of tables.
 	:param text: convert to HTML.
+	:param reconstructed_language: used to categorize the text into the right language, when no language is given. Even for reconstructions, this is rarely needed.
 	:return data: a dictionary of the Languages, Etymologies and Pronunciations
 	"""
 
@@ -2738,7 +2741,14 @@ def compact(text, page_title, reconstructed_language):
 	node_class = None # For knowing how to handle it
 
 	data = {} # return dictionary
-	for line in text.split('\n'):
+
+	# DGN Modification: new method for splitting lines and avoiding \n inside {{ }} templates
+	bracesIndices = set(r for f in findMatchingBraces(text) for r in range(f[0],f[1])) # All the top-level templates
+	newLineIndices = [l.span()[0] for l in re.finditer(r'\n', text) if l.span()[0] not in bracesIndices]; newLineIndices # indices of new lines
+	parts = [text[i+1:j] for i,j in zip([-1] + newLineIndices, newLineIndices + [None])]; parts # Added [-1] to ensure beginning is captured
+	if len(newLineIndices) > 0:
+		parts.insert(0, text[0:newLineIndices[0]]); # Needed to get the first item in the page
+	for line in parts:
 		if not line:					# collapse empty lines
 			# if there is an opening list, close it if we see an empty line
 			if len(listLevel):
