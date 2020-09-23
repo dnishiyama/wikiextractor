@@ -780,7 +780,7 @@ class WikiProcessor(object):
 
 	def get_processed_text_from_single_word(self, word):
 		processed_wikidump = self.get_processed_wikidump_from_single_word(word)
-		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl = self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
+		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl = self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=True)
 
 		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
 		return en_prons_dl, en_etys_dl, en_defs_dl
@@ -1002,7 +1002,10 @@ class WikiProcessor(object):
 		nodeConnections = []
 		for i, connection in enumerate(all_connections):
 	#		  if i % 50000 == 0: print(f'\r{i}/{len(all_connections)}', end='')
-			nodeConnections += self.getNodeConnections(connection)
+			try:
+				nodeConnections += self.getNodeConnections(connection)
+			except KeyError as k:
+				print(k)
 	#	  nodeConnections[2003]
 		if self.store_intermediates: self.node_connections = nodeConnections
 		return nodeConnections
