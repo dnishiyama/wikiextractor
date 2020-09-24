@@ -413,7 +413,7 @@ def wikitext_is_excluded(wikitext):
 	Determines if wikitext should be ignored and replaced with '' """
 	parts = splitParts(wikitext[2:-2])
 	title = parts[0]
-	if title in ['LDL', ]:
+	if title in ['LDL', 'wikispecies']:
 		return True
 
 	# If there is a 'en-noun' or other tag, ignore these

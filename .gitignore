@@ -95,3 +95,5 @@ ENV/
 
 # Editor files
 *.idea
+
+.DS_Store
