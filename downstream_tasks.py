@@ -302,6 +302,16 @@ def parseTemplates(template, session=None, quote=True, cache=False, resetCache=F
 		templateCache[template] = linklessText
 	return linklessText
 
+def get_sentiment_type(text):
+    sentiment = 'other'
+    if cognate_str(text): sentiment = 'cognate'
+    elif text in BRANCH_TEXTS: sentiment = 'branch'
+    elif text in EQUIVALENT_TEXTS: sentiment = 'equivalent'
+    elif text in RESTART_TEXTS: sentiment = 'restart'
+    elif from_str(text): sentiment = 'from'
+    
+    return sentiment
+
 def getHtmlText(html):
 	"""Get the html via BS4 and then drop tables"""
 	soup = bs4.BeautifulSoup(html, features="lxml")
@@ -1465,14 +1475,12 @@ def getConnectionsForIndex(idx, cursor, data):
 	c, missing_parts = get_entry_connections(wtp); c
 	return [cj for ci in c for cj in getNodeConnections(ci, cursor)]
 
-def getAncestorsForIndex(idx):
+def getAncestorsForIndex(idx, max_loops=100):
 	idxs = [idx]
-	remaining_loops = 100
-	while remaining_loops > 0:
+	while max_loops > 0:
 		newConnections = getConnectionsForIndex(idx)
 		idxs = []
 		max_loops -= 1
-
 
 def get_tree(conn, _id:int, compression:int=1, details:bool=True, hides:list=[], all_entry_numbers:bool=False):
 	""" Returns tree and list of etymologies"""
