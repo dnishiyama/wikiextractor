@@ -1,6 +1,8 @@
 from dgnutils import *
 from WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from
 
+# Updated on 9-25-20
+
 # {{{ WIKTIONARY TEMPLATE PARSING
 
 SINGLE_PATH_TEXTS = [
