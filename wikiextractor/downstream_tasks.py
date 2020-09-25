@@ -1218,6 +1218,32 @@ class WikiProcessor(object):
 		logging.info(f'Found {len(roots_set)} connection_sources. Inserting...')
 		insert(self.cursor,'connections',ignore=True,many=True, **{'root':roots_set,'descendant':descs_set,})
 
+	def evaluate_single_word(self, word):
+		processed_wikidump = {}
+
+		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
+		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
+
+		# Grab data from the dump (choose which dump)
+		wiki_dump_path = self.input_path + self.dump_file_name
+		data = get_data_from_title(word, wiki_dump_path); data
+
+		# convert that data into the objects
+		processed_wikidump[word] = data
+		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl =\
+			self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
+
+		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
+
+		self.en_dict = {e['entry_id']:e['entry_number'] for e in en_conns_dl}
+
+		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
+		# Show the objects
+
+		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
+		node_connections = self.get_nodes_from_connections(all_connections)
+		roots, descs, table_sources, entry_numbers = self.get_mysql_data_from_nodes(node_connections)
+
 
 ### END OF WIKIEXTRACTOR CLASS
 
