@@ -418,7 +418,7 @@ def wikitext_is_connection_forming(wikitext):
 RE_REQUEST_TEMPLATE = r'rf[0-9a-z- ]+'
 REQUEST_TEMPLATES = ['MW1913Abbr', 'Nuttall', 'USRegionDisputed', 'Webster 1913', 'ase-rfr', 'attention', 'beer', 'broken ref', 'checksense', 'copyvio suspected', 'delete', 'etystub', 'look', 'merge', 'missing template', 'move', 'split', 'stub entry', 't-needed', 'tbot entry', 'tea room', 'tea room sense', 'ttbc', 'defaults to und', 'unblock']
 
-def wikitext_is_excluded(wikitext):
+def wikitext_to_delete(wikitext):
 	"""
 	Determines if wikitext should be ignored and replaced with '' """
 	parts = splitParts(wikitext[2:-2])
@@ -434,34 +434,31 @@ def wikitext_is_excluded(wikitext):
 		return True
 	return False
 
-def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_connection_forming=False):
+def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_connection_forming=False):
 	logging.debug('Generating list of used wikitexts...')
 	wikitext_replacement_dict = {}
-	wikitext_list = set(s[s_i[0]:s_i[1]] for s in sentences for s_i in findMatchingBraces(s)) 
-
-	# Exclude some wikitexts (e.g. LDL, en-noun)
-	wikitext_list = set(w for w in wikitext_list if not wikitext_is_excluded(w))
-
+	full_wikitext_list = set(s[s_i[0]:s_i[1]] for s in sentences for s_i in findMatchingBraces(s)) 
+	# ignore some wikitext since they aren't useful in etymologies (e.g. LDL, en-noun, wikispecies)
+	wikitext_to_ignore = set(w for w in full_wikitext_list if ignore_connection_forming and wikitext_is_connection_forming(w))
 	# Exclude connection forming here (when doing REST lookups) and at end (when replacing them)
-	if exclude_connection_forming:
-		wikitext_list = set(w for w in wikitext_list if not wikitext_is_connection_forming(w))
+	wikitext_to_delete = set(w for w in full_wikitext_list if wikitext_to_delete(w) )
+	wikitext_list_to_replace = full_wikitext_list - wikitext_to_delete - wikitext_to_ignore
 
 	if cache_file:
 		logging.debug(f'Using cache file: {cache_file}...')
 		try:
 			with open(cache_file, 'rb+') as f:
 				wikitext_replacement_dict = pickle.load(f)
-			wikitext_list -= set(wikitext_replacement_dict.keys())
 			logging.debug(f'Found {len(wikitext_replacement_dict.keys())} wikitexts in {cache_file}...')
 		except FileNotFoundError as e:
 			logging.warning(f'Unable to load from {cache_file} due to {e}. Possibly it doesnt exist and will be written to')
 
-	wikitext_list = list(wikitext_list); len(wikitext_list)
+	wikitext_list_to_gather = list(set(wikitext_list_to_replace) - set(wikitext_replacement_dict.keys())) # must be list for incremental work later
 
-	if len(wikitext_list) == 0:
+	if len(wikitext_list_to_gather) == 0:
 		logging.debug(f'All wikitext accounted for...')
 	else:
-		logging.debug(f'There are {len(wikitext_list)} to gather...')
+		logging.debug(f'There are {len(wikitext_list_to_gather)} to gather...')
 
 		WIKI_API_URL = 'https://en.wiktionary.org/w/api.php?action=expandtemplates&format=json&prop=wikitext&text=' # 90 chars
 		PARAM_LEN_LIMIT = 8202 - len(WIKI_API_URL)
@@ -469,13 +466,13 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_con
 		wikitext_groupings = []
 
 		batch_size = 100
-		steps = len(wikitext_list)//batch_size + 1
+		steps = len(wikitext_list_to_gather)//batch_size + 1
 		logging.info(f'Generating groups of wikitexts for api calls over {steps} steps...')
 		for step in range(steps):
 			if not step % (max(steps//100,1)): print(f'\rStep {step}', end='')
 
 			next_result_batches = []
-			next_result_batches.append(wikitext_list[step*batch_size:(step+1)*batch_size])
+			next_result_batches.append(wikitext_list_to_gather[step*batch_size:(step+1)*batch_size])
 
 			stop = False # for stopping while loop when we cant truncate more
 			while not stop and any([len(urllib.parse.quote(filler.join(b))) > PARAM_LEN_LIMIT for b in next_result_batches]):
@@ -493,7 +490,6 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_con
 
 			wikitext_groupings += next_result_batches
 
-
 		batch_size = 500
 		steps = len(wikitext_groupings)//batch_size + 1; steps
 		logging.info(f'Performing API calls on wikitext_groupings over {steps} steps...')
@@ -510,15 +506,16 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, exclude_con
 		
 	logging.info('Replacing wikitext in the sentences...')
 	fixed_sentences = []
+
 	for sentence in sentences:
-		wikitexts = [sentence[s[0]:s[1]] for s in findMatchingBraces(sentence)]
-
-		# Must replace connection_forming here and at the beginning of the function
-		if exclude_connection_forming:
-			wikitexts = [w for w in wikitexts if not wikitext_is_connection_forming(w)]
-
-		for wikitext in wikitexts:
-			sentence = sentence.replace(wikitext, wikitext_replacement_dict.get(wikitext,''))
+		sentence_wikitext_to_replace = [sentence[s[0]:s[1]] for s in findMatchingBraces(sentence)] 
+		for wikitext in sentence_wikitext_to_replace:
+			if ignore_connection_forming and wikitext_is_connection_forming(wikitext): 
+				continue # ignore some
+			elif wikitext_to_delete(wikitext):
+				sentence = sentence.replace(wikitext, '')
+			else:
+				sentence = sentence.replace(wikitext, wikitext_replacement_dict.get(wikitext,''))	
 		fixed_sentences.append(sentence.replace('()','').strip().replace(': ','').replace('\n* ', '\n '))
 #	  pdb.set_trace()
 	return fixed_sentences
@@ -845,14 +842,14 @@ class WikiProcessor(object):
 		parsed_etymologies_except_conns = multi_parse_wikitext_sentences(
 			[e['wikitext'] for e in en_etys_dl], 
 			cache_file=self.cache_path+'ety.wik' if self.cache_path else None,
-			exclude_connection_forming=True,
+			ignore_connection_forming=True,
 		)
 		en_etys_dl = [{**z[0], 'wikitext':z[1]} for z in zip(en_etys_dl, parsed_etymologies_except_conns)]
 
 		parsed_etymologies = multi_parse_wikitext_sentences(
 			[e['wikitext'] for e in en_etys_dl], 
 			cache_file=self.cache_path+'ety.wik' if self.cache_path else None,
-			exclude_connection_forming=False,
+			ignore_connection_forming=False,
 		)
 		en_etys_dl = [{**z[0], 'etymology':z[1]} for z in zip(en_etys_dl, parsed_etymologies)]
 
