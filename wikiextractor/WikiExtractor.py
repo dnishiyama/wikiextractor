@@ -799,7 +799,8 @@ class Extractor(object):
 			text = text.replace('|-', '')
 			text = text.replace('|', '')
 		if options.toHTML:
-			text = html.escape(text)
+			raise Exception('Cannot convert to html. No longer supported (DGN)')
+			# text = html.escape(text)
 		return text
 
 
@@ -2927,7 +2928,7 @@ def load_templates(file, output_file=None):
 	if output_file:
 		output = codecs.open(output_file, 'wb', 'utf-8')
 	for page_count, page_data in enumerate(pages_from(file)):
-		id, revid, title, ns,catSet, page = page_data
+		id, revid, title, ns, catSet, page = page_data
 		if not output_file and (not options.templateNamespace or
 								not options.moduleNamespace):  # do not know it yet
 			# reconstruct templateNamespace and moduleNamespace from the first title
@@ -2982,10 +2983,12 @@ def pages_from(input):
 			if inText:
 				page.append(line)
 				# extract categories
-				if line.lstrip().startswith('[[Category:'):
-					mCat = catRE.search(line)
-					if mCat:
-						catSet.add(mCat.group(1))
+				# No longer extracting categories DGN
+				# if line.lstrip().startswith('[[Category:'):
+					# mCat = catRE.search(line)
+					# if mCat:
+						# catSet.add(mCat.group(1))
+						# print(catSet)
 			continue
 		m = tagRE.search(line)
 		if not m:
@@ -3241,7 +3244,7 @@ def reduce_process(opts, output_queue, spool_length,
 		nextFile = NextFile(out_file)
 		output = OutputSplitter(nextFile, file_size, file_compress)
 	else:
-		output = sys.stdout if PY2 else sys.stdout.buffer
+		output = sys.stdout.buffer
 		if file_compress:
 			logging.warn("writing to stdout, so no output compression (use an external tool)")
 

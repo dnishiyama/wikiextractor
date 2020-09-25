@@ -1,5 +1,6 @@
 import fileinput
 from dgnutils import *
+from dgnutils import restore_missing_tables
 from wikiextractor.WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from, keepPage
 from io import StringIO
 
@@ -1477,42 +1478,42 @@ def get_entry_connections(wikitext_parts, verbose=False):
 	return connections, missed_parts
 
 
-def getConnectionsForID(cursor, _id):
-	sql_stmt = """
-	SELECT *
-	FROM etymologies e 
-	INNER JOIN entry_connections ec ON e._id=ec.etymology_id
-	INNER JOIN entry_etymologies ee ON ee.entry_id = ec.entry_id
-	WHERE e._id = %s
-	"""
-	# try:
-	entry = cursor.d(sql_stmt, _id)[0]; entry
-	wtp = get_wikitext_parts_dict(entry); wtp
-	c, missing_parts = get_entry_connections(wtp); c
-	nodeConnections = [cj for ci in c for cj in getNodeConnections(ci, cursor)]
-	return nodeConnections
-	# except:
-	# print(f'No connections for _id={_id}')
+# def getConnectionsForID(cursor, _id):
+# 	sql_stmt = """
+# 	SELECT *
+# 	FROM etymologies e 
+# 	INNER JOIN entry_connections ec ON e._id=ec.etymology_id
+# 	INNER JOIN entry_etymologies ee ON ee.entry_id = ec.entry_id
+# 	WHERE e._id = %s
+# 	"""
+# 	# try:
+# 	entry = cursor.d(sql_stmt, _id)[0]; entry
+# 	wtp = get_wikitext_parts_dict(entry); wtp
+# 	c, missing_parts = get_entry_connections(wtp); c
+# 	nodeConnections = [cj for ci in c for cj in getNodeConnections(ci, cursor)]
+# 	return nodeConnections
+# 	# except:
+# 	# print(f'No connections for _id={_id}')
 
 def getIndexForWordAndLanguage(word, lang, data):
 	"""data: a dictionary of entries with the keys being indices"""
 	return next(iter(d for d in data if d['word']==word and d['language_name']==lang),{}).get('entry_id', None)
 
-def getConnectionsForIndex(idx, cursor, data):
-	"""data: a dictionary of entries with the keys being indices"""
-#	  singleNodeConnections = []
-# data comes from mysql
-	entry = data[idx]; entry
-	wtp = get_wikitext_parts_dict(entry); wtp
-	c, missing_parts = get_entry_connections(wtp); c
-	return [cj for ci in c for cj in getNodeConnections(ci, cursor)]
+# def getConnectionsForIndex(idx, cursor, data):
+# 	"""data: a dictionary of entries with the keys being indices"""
+# #	  singleNodeConnections = []
+# # data comes from mysql
+# 	entry = data[idx]; entry
+# 	wtp = get_wikitext_parts_dict(entry); wtp
+# 	c, missing_parts = get_entry_connections(wtp); c
+# 	return [cj for ci in c for cj in getNodeConnections(ci, cursor)]
 
-def getAncestorsForIndex(idx, max_loops=100):
-	idxs = [idx]
-	while max_loops > 0:
-		newConnections = getConnectionsForIndex(idx)
-		idxs = []
-		max_loops -= 1
+# def getAncestorsForIndex(idx, max_loops=100):
+# 	idxs = [idx]
+# 	while max_loops > 0:
+# 		newConnections = getConnectionsForIndex(idx)
+# 		idxs = []
+# 		max_loops -= 1
 
 def get_tree(conn, _id:int, compression:int=1, details:bool=True, hides:list=[], all_entry_numbers:bool=False):
 	""" Returns tree and list of etymologies"""
