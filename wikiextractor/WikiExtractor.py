@@ -70,32 +70,11 @@ import json
 from io import StringIO
 from multiprocessing import Queue, Process, Value, cpu_count
 from timeit import default_timer
-
-PY2 = sys.version_info[0] == 2
-# Python 2.7 compatibiity
-if PY2:
-	from urllib import quote
-	from htmlentitydefs import name2codepoint
-	from itertools import izip as zip, izip_longest as zip_longest
-	range = xrange	# Use Python 3 equivalent
-	chr = unichr	# Use Python 3 equivalent
-	text_type = unicode
-
-	class SimpleNamespace(object):
-		def __init__ (self, **kwargs):
-			self.__dict__.update(kwargs)
-		def __repr__ (self):
-			keys = sorted(self.__dict__)
-			items = ("{}={!r}".format(k, self.__dict__[k]) for k in keys)
-			return "{}({})".format(type(self).__name__, ", ".join(items))
-		def __eq__ (self, other):
-			return self.__dict__ == other.__dict__
-else:
-	from urllib.parse import quote
-	from html.entities import name2codepoint
-	from itertools import zip_longest
-	from types import SimpleNamespace
-	text_type = str
+from urllib.parse import quote
+from html.entities import name2codepoint
+from itertools import zip_longest
+from types import SimpleNamespace
+text_type = str
 
 
 # ===========================================================================
@@ -209,7 +188,7 @@ templateKeys = set(['10', '828'])
 
 ##
 # Regex for identifying disambig pages
-filter_disambig_page_pattern = re.compile("{{disambig(uation)?(\|[^}]*)?}}|__DISAMBIG__")
+filter_disambig_page_pattern = re.compile(r"{{disambig(uation)?(\|[^}]*)?}}|__DISAMBIG__")
 
 ##
 g_page_total = 0
@@ -343,7 +322,7 @@ def unescape(text):
 		except:
 			return text  # leave as is
 
-	return re.sub("&#?(\w+);", fixup, text)
+	return re.sub(r"&#?(\w+);", fixup, text)
 
 
 # Match HTML comments
@@ -804,8 +783,8 @@ class Extractor(object):
 		text = text.replace('\t', ' ')
 		text = spaces.sub(' ', text)
 		text = dots.sub('...', text)
-		text = re.sub(' (,:\.\)\]»)', r'\1', text)
-		text = re.sub('(\[\(«) ', r'\1', text)
+		text = re.sub(r' (,:\.\)\]»)', r'\1', text)
+		text = re.sub(r'(\[\(«) ', r'\1', text)
 		# DGN modification on next line to allow lines with }} to stay
 		# text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)	# lines with only punctuations
 		text = re.sub(r'\n[^a-zA-Z0-9_{}]+?\n', '\n', text, flags=re.U)	# lines with only punctuations
@@ -1232,11 +1211,11 @@ def findMatchingBraces(text, ldelim=0):
 	#	{{{link|{{ucfirst:{{{1}}}}}} interchange}}}
 
 	if ldelim:	# 2-3
-		reOpen = re.compile('[{]{%d,}' % ldelim)  # at least ldelim
-		reNext = re.compile('[{]{2,}|}{2,}')  # at least 2
+		reOpen = re.compile(r'[{]{%d,}' % ldelim)  # at least ldelim
+		reNext = re.compile(r'[{]{2,}|}{2,}')  # at least 2
 	else:
-		reOpen = re.compile('{{2,}|\[{2,}')
-		reNext = re.compile('{{2,}|}{2,}|\[{2,}|]{2,}')  # at least 2
+		reOpen = re.compile(r'{{2,}|\[{2,}')
+		reNext = re.compile(r'{{2,}|}{2,}|\[{2,}|]{2,}')  # at least 2
 
 	cur = 0
 	while True:
@@ -1819,7 +1798,7 @@ def sharp_ifeq(extr, lvalue, rvalue, valueIfTrue, valueIfFalse=None, *args):
 
 
 def sharp_iferror(extr, test, then='', Else=None, *args):
-	if re.match('<(?:strong|span|p|div)\s(?:[^\s>]*\s+)*?class="(?:[^"\s>]*\s+)*?error(?:\s[^">]*)?"', test):
+	if re.match(r'<(?:strong|span|p|div)\s(?:[^\s>]*\s+)*?class="(?:[^"\s>]*\s+)*?error(?:\s[^">]*)?"', test):
 		return extr.expand(then.strip())
 	elif Else is None:
 		return test.strip()
@@ -1998,7 +1977,7 @@ def define_template(title, page):
 	if not page: return
 
 	# check for redirects
-	m = re.match('#REDIRECT.*?\[\[([^\]]*)]]', page[0], re.IGNORECASE)
+	m = re.match(r'#REDIRECT.*?\[\[([^\]]*)]]', page[0], re.IGNORECASE)
 	if m:
 		options.redirects[title] = m.group(1)  # normalizeTitle(m.group(1))
 		return
@@ -2462,7 +2441,7 @@ wgUrlProtocols = [
 EXT_LINK_URL_CLASS = r'[^][<>"\x00-\x20\x7F\s]'
 ANCHOR_CLASS = r'[^][\x00-\x08\x0a-\x1F]'
 ExtLinkBracketedRegex = re.compile(
-	'\[((' + '|'.join(wgUrlProtocols) + ')' + EXT_LINK_URL_CLASS + r'+)' +
+	r'\[((' + r'|'.join(wgUrlProtocols) + r')' + EXT_LINK_URL_CLASS + r'+)' +
 	r'\s*((?:' + ANCHOR_CLASS + r'|\[\[' + ANCHOR_CLASS + r'+\]\])' + r'*?)\]',
 	re.I | re.S | re.U)
 # A simpler alternative:
@@ -2529,7 +2508,7 @@ def makeExternalImage(url, alt=''):
 # ----------------------------------------------------------------------
 
 # match tail after wikilink
-tailRE = re.compile('\w+')
+tailRE = re.compile(r'\w+')
 
 syntaxhighlight = re.compile('&lt;syntaxhighlight .*?&gt;(.*?)&lt;/syntaxhighlight&gt;', re.DOTALL)
 
@@ -2764,7 +2743,7 @@ def compact(text, page_title, reconstructed_language):
 			for i in list(headers.keys()): # drop previous headers
 				if i > lev: del headers[i]
 
-			node_class = re.sub('_\d+| \d+', '', section_title).lower() #removed '_x' info
+			node_class = re.sub(r'_\d+| \d+', '', section_title).lower() #removed '_x' info
 
 			if lev == 2:
 				node_class = None # dont use node_class for languages

@@ -1,5 +1,12 @@
+import fileinput
 from dgnutils import *
-from WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from
+from wikiextractor.WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from, keepPage
+from io import StringIO
+
+options.write_json = True
+options.expand_templates = False
+options.keepLists=True
+options.keepSections=True
 
 # Updated on 9-25-20
 
@@ -45,10 +52,10 @@ RESTART_TEXTS = [
 ]
 
 RE_NON_WIKI_PAREN = r'' + \
-'(?<=\W)' + \
-'\([^()]*\)'+ \
-'(?=\W|$)' + \
-'(?![^{]*})'
+r'(?<=\W)' + \
+r'\([^()]*\)'+ \
+r'(?=\W|$)' + \
+r'(?![^{]*})'
 RE_NON_WIKI_PAREN = r'(?:(?<=\W)|^)\([^()]*\)(?=\W|$)(?![^{]*})'
 RE_UNCLOSED_PAREN = r'\([^\)]*?$' # unclosed paren
 
@@ -441,10 +448,10 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_conn
 	wikitext_replacement_dict = {}
 	full_wikitext_list = set(s[s_i[0]:s_i[1]] for s in sentences for s_i in findMatchingBraces(s)) 
 	# ignore some wikitext since they aren't useful in etymologies (e.g. LDL, en-noun, wikispecies)
-	wikitext_to_ignore = set(w for w in full_wikitext_list if ignore_connection_forming and wikitext_is_connection_forming(w))
+	wikitext_list_to_ignore = set(w for w in full_wikitext_list if ignore_connection_forming and wikitext_is_connection_forming(w))
 	# Exclude connection forming here (when doing REST lookups) and at end (when replacing them)
-	wikitext_to_delete = set(w for w in full_wikitext_list if wikitext_to_delete(w) )
-	wikitext_list_to_replace = full_wikitext_list - wikitext_to_delete - wikitext_to_ignore
+	wikitext_list_to_delete = set(w for w in full_wikitext_list if wikitext_to_delete(w) )
+	wikitext_list_to_replace = full_wikitext_list - wikitext_list_to_delete - wikitext_list_to_ignore
 
 	if cache_file:
 		logging.debug(f'Using cache file: {cache_file}...')
@@ -738,16 +745,16 @@ class WikiProcessor(object):
 	#####################
 	### MAIN FUNCTION ###
 	#####################
-	def process_wikidump(self):
+	def process_wikidump(self, commit=True):
 		"""
 		Main function for converting the extracted wikidump file into mysql
 		"""
+		restore_missing_tables(self.cursor, 'etymology_explorer_prod') # from dgnutils. Repair missing tables
 		refresh_tables(self.cursor, ['etymologies', 'languages'] if not self.test else [])      
 		if self.test:
 			logging.debug(f'Inserting languages data due to TEST')
 			self.cursor.e('INSERT INTO languages SELECT * FROM etymology_explorer_prod.languages')
 			# self.cursor.e('INSERT INTO etymologies SELECT * FROM etymology_explorer_prod.etymologies LIMIT 100')
-
 
 		# Initialization of reused dictionaries
 		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
@@ -763,7 +770,8 @@ class WikiProcessor(object):
 
 		self.insert_unmatched_words_into_mysql()
 		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers)
-		self.conn.commit()
+		if commit:
+			self.conn.commit()
 
 	def get_connections_from_single_wikitext(self, wikitext, store_intermediates=False):
 		self.store_intermediates = store_intermediates
@@ -779,7 +787,7 @@ class WikiProcessor(object):
 
 	def get_processed_wikidump_from_single_word(self, word):
 		processed_wikidump = {}
-		text = get_wikidump_text(word, filename=self.input_path+self.dump_file_name); text[:50]
+		text = get_wikidump_text(word, filepath=self.input_path + self.dump_file_name); text[:50]
 		e = Extractor(0, 0, word, text); e
 		text = e.transform(text); text
 		text = e.wiki2text(text); text
@@ -982,7 +990,6 @@ class WikiProcessor(object):
 		wikitext_part_array = [get_wikitext_parts_dict(entry) for entry in en_etys_dl if entry['wikitext']]
 		if self.store_intermediates: self.wikitext_part_array = wikitext_part_array
 		return wikitext_part_array
-
 
 	def get_connections_from_wikitext_parts(self, wikitext_part_array):
 		"""
@@ -1630,14 +1637,14 @@ def get_tree_connections(tree):
 	return connections
 	
 
-def get_wikidump_text(word, filename='/Users/nish/development/git/wikiextractor/input/enwiktionary-latest-pages-articles.xml'):
+def get_wikidump_text(word, filepath='/Users/nish/development/git/wikiextractor/input/enwiktionary-latest-pages-articles.xml'):
 	"""
 	:param word - the word to search for
-	:param filname (optional) - the filename to search in
+	:param filname (optional) - the filepath to search in
 	Get the text of a particular word from the enwiktionary-latest-pages-articles.xml
 	Uses pages_from of WikiExtractor
 	"""
-	with open(filename, 'r') as f:
+	with open(filepath, 'r') as f:
 		for i, page_data in enumerate(pages_from(f)):
 			if i and not i % 100000: print(f'\rEvaluated {i} pages', end='')
 			id, revid, title, ns, catSet, page = page_data
@@ -1646,5 +1653,98 @@ def get_wikidump_text(word, filename='/Users/nish/development/git/wikiextractor/
 				break
 	logging.error(f'Could not find word: {word}')
 	return ''
+
+def wikiextract_dump(wiki_dump_path, output_path, limit=None):
+	"""
+	Convert a wiktionary dump file into a group of extracted files
+	output_path = directory to output (will add "AA/wiki_00" onto the path)
+	wiki_dump_path = path to the dump file e.g. "input/test.xml"
+	"""
+	pages = extract_pages(wiki_dump_path, limit=limit)
+	output_file_path = output_path + 'AA/wiki_00'
+	os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+	with open(output_file_path, 'w') as output_file:
+		output_file.write('\n'.join([json.dumps(p) for p in pages]))
+
+def extract_pages(wiki_dump_path, limit=None):
+	"""
+	Convert a wiktionary dump file into a list of json pages
+	Should only be used for the test file
+	wiki_dump_path = path to the dump file e.g. "input/test.xml"
+	"""
+	out = StringIO()
+	pages=[]
+	with open(wiki_dump_path, 'r') as wiki_dump:
+		for page_data in pages_from(wiki_dump):
+			id, revid, title, ns, catSet, page = page_data
+			if ns in ['0','118']: # articles and reconstructions
+				e = Extractor(id, revid, title, page) 
+				e.extract(out)
+				pages.append(json.loads(out.getvalue().replace('\x00','').strip()))
+				out.truncate(0)
+			if limit and len(pages) >= limit :
+				return pages
+	return pages
+
+# !ls /gdrive/My\ Drive/Work/EtymologyExplorer/Development/input/test.xml
+# wikidump path might be '/gdrive/My Drive/Work/EtymologyExplorer/Development/input/enwiktionary-latest-pages-articles.xml'
+def get_page_from_wiki_dump(word, wiki_dump_path):
+	"""
+	finds a page by title from a wiktionary dump
+	Returns the lines between <page> and </page> (inclusive)
+	Returns a list of lines
+	"""
+	current_page = []
+	found_title = False
+	with open(wiki_dump_path, 'r') as wiki_dump:
+		for i,line in enumerate(wiki_dump):
+			stripped_line = line.strip()
+			if stripped_line == '<page>':
+				current_page = []
+			elif found_title and stripped_line == '</page>': 
+				current_page.append(line)
+				return current_page
+			elif stripped_line == f'<title>{word}</title>':
+				found_title = True
+			current_page.append(line)
+
+# input_path = '/gdrive/My Drive/Work/EtymologyExplorer/Development/input/enwiktionary-latest-pages-articles.xml'
+def get_data_from_title(title, input_path):
+	"""
+	Get the WikiExtractor parsed data from one entry in the enwik...xml file
+	"""
+	# input_path = '/gdrive/My Drive/Work/EtymologyExplorer/Development/test.xml'
+	out = StringIO()
+	title_page = get_page_from_wiki_dump(title, wiki_dump_path=input_path)
+	for page_data in pages_from(title_page):
+		id, revid, _title, ns, catSet, page = page_data
+		if _title == title:
+			e = Extractor(0, 0, title, page) 
+			e.extract(out)
+			data = json.loads(out.getvalue())['data']; data
+			return data
+
+# test_file_path = '/gdrive/My Drive/Work/EtymologyExplorer/Development/input/test.xml'
+def append_page_onto_wiki_test(page, test_file_path):
+	"""
+	take a page (list of lines) from the main wiktionary dump via get_page_from_wiki_dump()
+	then append that to the test file (test_file_path)
+	For adding new test cases
+	"""
+	with open(test_file_path, "r+") as file:
+		file.seek(0, os.SEEK_END) # Move the pointer to the end of the file
+		pos = file.tell() - 1 # skips to the very last character in the file
+
+      # Find last newline character
+		while pos > 0 and file.read(1) != "\n":
+			pos -= 1
+			file.seek(pos, os.SEEK_SET)
+
+      # delete all later characters ahead (unless at beginning of file)
+		if pos > 0:
+			file.seek(pos, os.SEEK_SET)
+			file.truncate()
+		file.writelines(page + ['</mediawiki>']) # Add the new page
+
 
 # }}}
