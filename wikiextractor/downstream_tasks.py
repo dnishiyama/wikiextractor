@@ -1,4 +1,5 @@
 import fileinput
+from unidecode import unidecode
 from dgnutils import *
 from dgnutils import restore_missing_tables
 from wikiextractor.WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from, keepPage
@@ -8,6 +9,7 @@ options.write_json = True
 options.expand_templates = False
 options.keepLists=True
 options.keepSections=True
+options.acceptedNamespaces = ['w', 'wiktionary', 'wikt', 'reconstruction', 'wikipedia', 'wikispecies', 'rhymes', 'q', 'citations', 'wikisource', 'appendix'] # for internal links
 
 # Updated on 9-25-20
 
@@ -85,7 +87,7 @@ SINGLE_PATH_TYPES = [
 	'suffix', 'suf',
 	'prefix', 'pre',
 	'confix',
-	'w',
+	# 'w', # So wikipedia won't be kept! 
 	'learned borrowing', # rare, used in trapezium
 	'he-m', 'he-l', # rare, used in Hebrew like עומר
 	'ja-r', # rare for japanese words like もしもし
@@ -285,7 +287,7 @@ MISSING_LANG_DICT = {
 	 'qfa-adm-pro': "Proto-Great Andamanese",
 }
 
-RE_FROM = r"(?: :|,|^)(?: (?:\w|-)+)*(?: [Ff]rom| of| [Aa]ttested| [Dd]erivative| [Pp]robably| [Pp]erhaps)(?: (?:\w|-)+)*,? \*?$"
+RE_FROM = r"(?: :|,|^)(?: (?:\w|-|')+)*(?: [Ff]rom| of| [Aa]ttested| [Dd]erivative| [Pp]robably| [Pp]erhaps)(?: (?:\w|-)+)*,? ?\*?$"
 
 WIKI_API_URL = 'https://en.wiktionary.org/w/api.php?action=expandtemplates&format=json&prop=wikitext&text=' # 90 chars
 PARAM_LEN_LIMIT = 8202 - len(WIKI_API_URL)
@@ -538,13 +540,15 @@ def test_re_from(new_re_from=None):
 	" : Compound of ", ", compound of ", " : Perhaps from ", ", perhaps from ",
 	", noun of action from perfect passive participle ", ", from verb ", ' : 1581, first mention is the derivative ',
 	' : from *', ' : Probably ', ' : Probably a non-Indo-European ', ' : First attested in the 13th century as ',
-	' : Probably ', ' : Probably a non-Indo-European ', ' : From the Roman name, ']
-	bad_strings = [": Borrowed from", ", borrowed from", ", + noun of action suffix "]
+	' : Probably ', ' : Probably a non-Indo-European ', ' : From the Roman name, ',  ' : Vṛddhi form of ',
+ 	' : Apheresized form of ', " : Ren'yokei form of ", " : Ren'yōkei of ", ' : From Late-', ", borrowed from",
+	" : From Middle Persian", " : From Neo-", " : From Argentine-", " : From the on'yomi of",
+	" : Derived from the masculine form", " : From the on'yomi of"]
+	bad_strings = [": Borrowed from", ", + noun of action suffix "]
 	for string in good_strings:
 		assert from_str(string, new_re_from), f'Should be "from", but is not! {string}'
 	for string in bad_strings:
 		assert not from_str(string, new_re_from), f'Should not be "from", but is! {string}'
-
 
 RE_COGNATE = r"(?: :|,|^|\.)(?: \w+)*(?: [Cc]ognate(?:s{0,1})| [Cc]ompare| [Ss]ee| [Rr]elated| [Mm]ore at| [Ee]quivalent to)(?: \w+)* "
 def test_re_cognate(new_re_cognate=None):
@@ -578,7 +582,8 @@ def from_str(s, new_re_from=None, new_single_path_texts=None):
 	global SINGLE_PATH_TEXTS
 	if new_re_from: RE_FROM = new_re_from
 	if new_single_path_texts: SINGLE_PATH_TEXTS = new_single_path_texts
-	return bool(re.search(RE_FROM, s)) or s in SINGLE_PATH_TEXTS
+	decoded_str = unidecode(s)
+	return bool(re.search(RE_FROM, decoded_str)) or decoded_str in SINGLE_PATH_TEXTS
 
 def test_from_str():
 	assert from_str(' : A ')

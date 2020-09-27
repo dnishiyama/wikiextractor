@@ -12,6 +12,13 @@ dump_file_name = 'test.xml'
 # from dgnutils import close_connectiosn
 # close_connections('etymology_explorer_test')
 
+def test_internal_links():
+	assert replaceInternalLinks('[[Wikispecies:Pezizaceae|Pezizaceae]]') == 'Pezizaceae'
+	assert replaceInternalLinks('[[Wikispecies]]') == 'Wikispecies'
+	assert replaceInternalLinks('[[Wikispecies:test1|test2]]') == 'test2'
+	assert replaceInternalLinks('[[Wikispecies:test1|test2]]ing') == 'test2ing'
+	# replaceInternalLinks('[[Wikispecies:test|]]') = 'test' # Should piping trick work?
+
 wp = WikiProcessor(extraction_dir, store_intermediates=True, dump_file_name=dump_file_name, channel='test')
 
 def test_multi_parse_wikitext_sentences():
@@ -121,8 +128,8 @@ def test_wiki_process():
 	assert len(wp.language_dict) > 0
 	assert 'xsc-sak-pro' in wp.language_dict
 
-	assert len(wp.missed_etymologies) == 1
-	assert wp.missed_etymologies[0][0]['wikitext'] == '{{w|Lewis Carroll}}'
+	# assert len(wp.missed_etymologies) == 1
+	# assert wp.missed_etymologies[0][0]['wikitext'] == '{{w|Lewis Carroll}}'
 
 	assert wp.next_wl_2_id > 0
 
