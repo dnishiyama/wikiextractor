@@ -433,7 +433,7 @@ def wikitext_to_delete(wikitext):
 	Determines if wikitext should be ignored and replaced with '' """
 	parts = splitParts(wikitext[2:-2])
 	title = parts[0]
-	if title in ['LDL', 'wikispecies']:
+	if title in ['LDL', 'wikispecies', 'HE root']:
 		return True
 
 	# If there is a 'en-noun' or other tag, ignore these
@@ -530,37 +530,26 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_conn
 #	  pdb.set_trace()
 	return fixed_sentences
 
-def test_re_from():
-	assert bool(re.search(RE_FROM, " : From "))
-	assert bool(re.search(RE_FROM, ", from "))
-	assert bool(re.search(RE_FROM, " : Probably from the prefix "))
-	assert bool(re.search(RE_FROM, ", probably from the prefix "))
-	assert bool(re.search(RE_FROM, " : Borrowed from "))
-	assert bool(re.search(RE_FROM, ", borrowed from "))
-	assert bool(re.search(RE_FROM, " : Borrowed partially from "))
-	assert bool(re.search(RE_FROM, ", borrowed partially from "))
-	assert bool(re.search(RE_FROM, " : Compound of "))
-	assert bool(re.search(RE_FROM, ", compound of "))
-	assert bool(re.search(RE_FROM, " : Perhaps from "))
-	assert bool(re.search(RE_FROM, ", perhaps from "))
-	assert bool(re.search(RE_FROM, ", noun of action from perfect passive participle "))
-	assert bool(re.search(RE_FROM, ", from verb "))
-	assert bool(re.search(RE_FROM, ' : 1581, first mention is the derivative '))
-	assert bool(re.search(RE_FROM, ' : from *'))
-	assert bool(re.search(RE_FROM, ' : Probably '))
-	assert bool(re.search(RE_FROM, ' : Probably a non-Indo-European '))
-	assert bool(re.search(RE_FROM, ' : First attested in the 13th century as '))
-	assert bool(re.search(RE_FROM, ' : Probably '))
-	assert bool(re.search(RE_FROM, ' : Probably a non-Indo-European '))
-	assert bool(re.search(RE_FROM, ' : From the Roman name, '))
-	assert not bool(re.search(RE_FROM, ": Borrowed from"))
-	assert not bool(re.search(RE_FROM, ", borrowed from"))
-	assert not bool(re.search(RE_FROM, ", + noun of action suffix "))
+def test_re_from(new_re_from=None):
+	global RE_FROM
+	if new_re_from: RE_FROM = new_re_from
+	good_strings = [" : From ", ", from ", " : Probably from the prefix ", ", probably from the prefix ",
+	" : Borrowed from ", ", borrowed from ", " : Borrowed partially from ", ", borrowed partially from ",
+	" : Compound of ", ", compound of ", " : Perhaps from ", ", perhaps from ",
+	", noun of action from perfect passive participle ", ", from verb ", ' : 1581, first mention is the derivative ',
+	' : from *', ' : Probably ', ' : Probably a non-Indo-European ', ' : First attested in the 13th century as ',
+	' : Probably ', ' : Probably a non-Indo-European ', ' : From the Roman name, ']
+	bad_strings = [": Borrowed from", ", borrowed from", ", + noun of action suffix "]
+	for string in good_strings:
+		assert from_str(string, new_re_from), f'Should be "from", but is not! {string}'
+	for string in bad_strings:
+		assert not from_str(string, new_re_from), f'Should not be "from", but is! {string}'
 
-test_re_from()
 
 RE_COGNATE = r"(?: :|,|^|\.)(?: \w+)*(?: [Cc]ognate(?:s{0,1})| [Cc]ompare| [Ss]ee| [Rr]elated| [Mm]ore at| [Ee]quivalent to)(?: \w+)* "
-def test_re_cognate():
+def test_re_cognate(new_re_cognate=None):
+	global RE_COGNATE
+	if new_re_cognate: RE_COGNATE = new_re_cognate
 	assert bool(re.search(RE_COGNATE, ". Germanic cognates include "))
 	assert bool(re.search(RE_COGNATE, ". Compare "))
 	assert bool(re.search(RE_COGNATE, " : Compare "))
@@ -580,12 +569,15 @@ def test_re_cognate():
 	assert bool(re.search(RE_COGNATE, " : From a __language__ root cognate with "))
 	assert bool(re.search(RE_COGNATE, " : Equivalent to "))
 	assert bool(re.search(RE_COGNATE, ' Cognate with '))
-test_re_cognate()
-  
+
 def cognate_str(s):
 	return bool(re.search(RE_COGNATE, s)) or s in COGNATE_TEXTS
 
-def from_str(s): 
+def from_str(s, new_re_from=None, new_single_path_texts=None): 
+	global RE_FROM
+	global SINGLE_PATH_TEXTS
+	if new_re_from: RE_FROM = new_re_from
+	if new_single_path_texts: SINGLE_PATH_TEXTS = new_single_path_texts
 	return bool(re.search(RE_FROM, s)) or s in SINGLE_PATH_TEXTS
 
 def test_from_str():
@@ -599,8 +591,10 @@ def test_from_str():
 	assert from_str(' : Perhaps ')
 	assert from_str(' : from ')
 	assert from_str(' Borrowed from ')
-test_from_str()
 
+test_from_str()
+test_re_cognate()
+test_re_from()
 
 def remove_matching_parens(text):
 	""" Also remove unmatching parens! """
@@ -1222,10 +1216,13 @@ class WikiProcessor(object):
 	def evaluate_single_word(self, word):
 		processed_wikidump = {}
 
+		restore_missing_tables(self.cursor, 'etymology_explorer_prod') # from dgnutils. Repair missing tables
+
 		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
 		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
 
 		# Grab data from the dump (choose which dump)
+		logging.info('Searching through dump (can take a minute)...')
 		wiki_dump_path = self.input_path + self.dump_file_name
 		data = get_data_from_title(word, wiki_dump_path); data
 

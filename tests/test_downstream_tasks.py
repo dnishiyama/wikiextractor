@@ -8,6 +8,10 @@ tests_dir = os.path.dirname(__file__)
 extraction_dir = tests_dir +'/wikiextractor_test_dir/' # input will be a subdir
 os.makedirs(os.path.dirname(extraction_dir), exist_ok=True)
 dump_file_name = 'test.xml'
+
+# from dgnutils import close_connectiosn
+# close_connections('etymology_explorer_test')
+
 wp = WikiProcessor(extraction_dir, store_intermediates=True, dump_file_name=dump_file_name, channel='test')
 
 def test_multi_parse_wikitext_sentences():
