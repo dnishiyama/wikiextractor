@@ -315,19 +315,22 @@ def parseTemplates(template, session=None, quote=True, cache=False, resetCache=F
 	return linklessText
 
 def get_sentiment_type(text):
-    sentiment = 'other'
-    if cognate_str(text): sentiment = 'cognate'
-    elif text in BRANCH_TEXTS: sentiment = 'branch'
-    elif text in EQUIVALENT_TEXTS: sentiment = 'equivalent'
-    elif text in RESTART_TEXTS: sentiment = 'restart'
-    elif from_str(text): sentiment = 'from'
-    
-    return sentiment
+	sentiment = 'other'
+	if cognate_str(text): sentiment = 'cognate'
+	elif text in BRANCH_TEXTS: sentiment = 'branch'
+	elif text in EQUIVALENT_TEXTS: sentiment = 'equivalent'
+	elif text in RESTART_TEXTS: sentiment = 'restart'
+	elif from_str(text): sentiment = 'from'
+	
+	return sentiment
 
 def getHtmlText(html):
 	"""Get the html via BS4 and then drop tables"""
 	soup = bs4.BeautifulSoup(html, features="lxml")
-	removeable_elements = soup.find_all("table", {'class':'metadata'}) + soup.find_all("div", {'class':'noprint'}) + soup.find_all('div', {'class':'NavFrame'})
+	removeable_elements = soup.find_all("table", {'class':'metadata'})\
+		+ soup.find_all("div", {'class':'noprint'})\
+		+ soup.find_all('div', {'class':'NavFrame'})\
+		+ soup.find_all("table", {'class':'wikitable'})
 	for element in removeable_elements: 
 		element.decompose()
 	text = soup.get_text()
@@ -413,8 +416,8 @@ def makeTemplateFromParts(template_parts:list):
 	return '{{' + '|'.join(template_parts) + '}}'
 
 def getWikitextsFromString(template_text:str)->list:
-    """Receive a string with wikitext and return the templates"""
-    return [template_text[s_i[0]:s_i[1]] for s_i in findMatchingBraces(template_text)]
+	"""Receive a string with wikitext and return the templates"""
+	return [template_text[s_i[0]:s_i[1]] for s_i in findMatchingBraces(template_text)]
 
 def wikitext_is_connection_forming(wikitext):
 	"""
@@ -742,6 +745,28 @@ class WikiProcessor(object):
 		self.wl_2_id = {(d['word'], d['language_name']): d['_id'] for d in self.cursor.d('SELECT _id, word, language_name FROM etymologies')}; len(self.wl_2_id)
 		self.next_wl_2_id = max([*self.wl_2_id.values(), -1]) + 1
 
+	def initialize_db(self):
+		""" Clear out the database, except for key tables (etymologies, languages) """
+		# from dgnutils. Repair missing tables
+		if self.test:
+			logging.debug(f'TEST ENVIRONMENT, only keeping languages')
+			refresh_tables(self.cursor, ['languages']) # refresh all the tables
+			# self.cursor.e('INSERT INTO languages SELECT * FROM etymology_explorer_prod.languages')
+			# self.cursor.e('INSERT INTO etymologies SELECT * FROM etymology_explorer_prod.etymologies LIMIT 100')
+		else:
+			refresh_tables(self.cursor, ['etymologies', 'languages'])      
+
+	def restore_db(self, source_database):
+		"""
+		Restore the database, based on a source database ('etymology_explorer_prod' or 'etymology_explorer_dev') 
+		If self.test (test environment), then just restore `languages` table, otherwise include `etymologies` also
+		"""
+		if self.test:
+			copy_tables(self.cursor, source_database, contents=['languages'])
+		else:
+			copy_tables(self.cursor, source_database, contents=['etymologies', 'languages'])
+
+
 	#####################
 	### MAIN FUNCTION ###
 	#####################
@@ -749,12 +774,7 @@ class WikiProcessor(object):
 		"""
 		Main function for converting the extracted wikidump file into mysql
 		"""
-		restore_missing_tables(self.cursor, 'etymology_explorer_prod') # from dgnutils. Repair missing tables
-		refresh_tables(self.cursor, ['etymologies', 'languages'] if not self.test else [])      
-		if self.test:
-			logging.debug(f'Inserting languages data due to TEST')
-			self.cursor.e('INSERT INTO languages SELECT * FROM etymology_explorer_prod.languages')
-			# self.cursor.e('INSERT INTO etymologies SELECT * FROM etymology_explorer_prod.etymologies LIMIT 100')
+		self.initialize_db()
 
 		# Initialization of reused dictionaries
 		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
@@ -1021,7 +1041,7 @@ class WikiProcessor(object):
 			try:
 				nodeConnections += self.getNodeConnections(connection)
 			except KeyError as k:
-				print(k)
+				print(f'KeyError in getNodeConnections: {k}')
 	#	  nodeConnections[2003]
 		if self.store_intermediates: self.node_connections = nodeConnections
 		return nodeConnections
@@ -1218,10 +1238,8 @@ class WikiProcessor(object):
 		logging.info(f'Found {len(roots_set)} connection_sources. Inserting...')
 		insert(self.cursor,'connections',ignore=True,many=True, **{'root':roots_set,'descendant':descs_set,})
 
-	def evaluate_single_word(self, word):
+	def process_single_word(self, word):
 		processed_wikidump = {}
-
-		restore_missing_tables(self.cursor, 'etymology_explorer_prod') # from dgnutils. Repair missing tables
 
 		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
 		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
@@ -1233,6 +1251,7 @@ class WikiProcessor(object):
 
 		# convert that data into the objects
 		processed_wikidump[word] = data
+		self.processed_wikidump = processed_wikidump
 		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl =\
 			self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
 
@@ -1715,6 +1734,21 @@ def extract_pages(wiki_dump_path, limit=None):
 				return pages
 	return pages
 
+def get_titles_from_wiki_dump(wiki_dump_path, limit=None):
+	"""
+	Get the list of titles that are in a wikidump
+	"""
+	pages=[]
+	with open(wiki_dump_path, 'r') as wiki_dump:
+		for page_data in pages_from(wiki_dump):
+			id, revid, title, ns, catSet, page = page_data
+			if ns in ['0','118']: # articles and reconstructions
+				pages.append(title)
+			if limit and len(pages) >= limit :
+				return pages
+	return pages
+
+
 # !ls /gdrive/My\ Drive/Work/EtymologyExplorer/Development/input/test.xml
 # wikidump path might be '/gdrive/My Drive/Work/EtymologyExplorer/Development/input/enwiktionary-latest-pages-articles.xml'
 def get_page_from_wiki_dump(word, wiki_dump_path):
@@ -1764,12 +1798,12 @@ def append_page_onto_wiki_test(page, test_file_path):
 		file.seek(0, os.SEEK_END) # Move the pointer to the end of the file
 		pos = file.tell() - 1 # skips to the very last character in the file
 
-      # Find last newline character
+	  # Find last newline character
 		while pos > 0 and file.read(1) != "\n":
 			pos -= 1
 			file.seek(pos, os.SEEK_SET)
 
-      # delete all later characters ahead (unless at beginning of file)
+	  # delete all later characters ahead (unless at beginning of file)
 		if pos > 0:
 			file.seek(pos, os.SEEK_SET)
 			file.truncate()
