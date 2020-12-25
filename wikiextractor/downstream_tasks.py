@@ -1,7 +1,6 @@
 import fileinput
 from unidecode import unidecode
 from dgnutils import *
-from dgnutils import restore_missing_tables
 from wikiextractor.WikiExtractor import findMatchingBraces, splitParts, options, replaceInternalLinks, dropNested, Extractor, compact, pages_from, keepPage
 from io import StringIO
 
@@ -287,6 +286,151 @@ MISSING_LANG_DICT = {
 	 'qfa-adm-pro': "Proto-Great Andamanese",
 }
 
+def parseTemplateByRule(self, templateString):
+	""" 
+	{{inh|gd|sga|ech}} => "Old Irish ech"
+	language_dict: {language_code:language_name}
+	returns None if it cannot be parsed
+	"""
+	max_len = 5
+	if '{{' in templateString[2:-2]: return None # Skip ones with nested wikitext
+	
+	typen, parts, partDict = getTemplateInfo(templateString)
+	z = {key:{int(i):'' for i in range(max_len)}
+		for key in ['parts', 'words', 'trs', 'parens', 'langcodes', 'langs', 'ts', 'alts', 'texts', 'poses', 'lits']
+	}
+	for i, part in enumerate(parts):
+		z['parts'][i] = part
+	
+	transliterated_langs = ['grc','ar','uk','cop','el','be','ru','hy','ka','gu','got','sva','sa','kn','xmf','tyv']
+	ignore_language = False
+	prepend = None
+	nodes = []
+	nodeType = None #TEMP
+	
+	self.language_dict['afa'] = 'Afroasiatic'
+
+	if typen == 'eeStart': 
+		z['words'][0] = z['parts'][1]
+		z['langcodes'][0] = z['parts'][0]
+
+	elif typen in ['inh', 'inherited', 'der', 'derived', 'bor', 'borrowed', 'learned borrowing', 'lbor']: 
+		z['words'][0] = z['parts'][2] or z['parts'][3]
+		z['langcodes'][0] = z['parts'][1]
+		z['alts'][0] = z['parts'][3]
+		z['ts'][0] = z['parts'][4]
+		
+	elif typen in ['l', 'link', 'm', 'mention']: 
+		z['words'][0] = z['parts'][1]
+		z['langcodes'][0] = z['parts'][0]
+		ignore_language = True
+		z['alts'][0] = z['parts'][2]
+		z['ts'][0] = z['parts'][3]
+			
+	elif typen in ['cog', 'cognate']:
+		z['words'][0] = z['parts'][1]
+		z['langcodes'][0] = z['parts'][0]
+		z['alts'][0] = z['parts'][2]
+		z['ts'][0] = z['parts'][3]
+
+	elif typen in ['com', 'compound', 'affix', 'af']: 
+		for i in range(1,len(z['parts'])):
+			z['words'][i-1] = z['parts'][i]
+			
+	elif typen in ['confix']: 
+		z['words'][0] = f'{z["parts"][1]}-'
+		z['words'][1] = f'-{z["parts"][2]}'
+
+	elif typen in ['suffix', 'suf']: 
+		z['words'][0] = z['parts'][1]
+		z['words'][1] = f'-{z["parts"][2]}'
+		
+	elif typen in ['prefix', 'pre']: 
+		z['words'][0] = f'{z["parts"][1]}-'
+		z['words'][1] = z["parts"][2]
+		
+	elif typen in ['circumfix']: 
+		z['words'][0] = f'{z["parts"][1]}-'
+		z['words'][1] = f'{z["parts"][2]}'
+		z['words'][2] = f'-{z["parts"][3]}'
+
+#     elif typen in ['he-m', 'he-l'],['ar-root'],['zh-l', 'zh-m'], ['ja-r']: 
+
+	elif typen in ['doublet']: 
+		z['words'][0] = z["parts"][1]
+		prepend = 'Doublet of '
+		
+	elif typen in ['ar-root', 'syc-root-entry', 'ja-kanjitab']:
+		return None
+	
+	elif typen in ['etyl']:
+		z['langcodes'][0] = z["parts"][0]
+	
+	elif typen in ['obor']:
+		prepend = 'Orthographic borrowing from '
+		z['langcodes'][0] = z['parts'][1]
+		
+	else:
+		return 'test'
+#         raise Exception(typen, templateString)
+		
+#     if language_code and language_code[:3] in transliterated_langs:
+#         transliterations.append(unidecode(words[0]))
+#         and unidecode(word) != word: return
+
+	# Some transliterations (unknown wiki media function)
+	
+	for k,v in z['words'].items():
+		if z['words'][k] in ['-', '']: z['words'][k] = None
+			
+	if not z['words'][0] and typen in ['inh', 'inherited']: z['words'][0] = '[Term?]'
+			
+	if not ignore_language:
+		z['langs'] = {k:self.language_dict.get(v, None) for k,v in z['langcodes'].items()}
+			
+	for name,v in partDict.items():
+		if name in ['transliteration', 'tr']: z['trs'][0] = v
+		elif name in ['gloss', 't']: z['ts'][0] = v
+		elif name in ['pos']: z['poses'][0] = v
+		elif name in ['lit']: z['lits'][0] = v
+		for i in range(max_len):
+			for key in ['lit']: 
+				if name == f'{key}{i+1}': z['lits'][i] = v
+			for key in ['gloss', 't']: 
+				if name == f'{key}{i+1}': z['ts'][i] = v
+			for key in ['transliteration', 'tr']: 
+				if name == f'{key}{i+1}': z['trs'][i] = v
+			for key in ['pos']: 
+				if name == f'{key}{i+1}': z['poses'][i] = v
+		
+	# Special cases
+	if not z['words'][0] and z['trs'][0]: z['words'][0] = z['trs'][0] 
+		
+	string = ''
+	if prepend: string += prepend
+	texts = []
+
+	for i in range(max_len):
+		# tr, gloss, pos, lit
+		if z['trs'][i]: z['parens'][i] = z['trs'][i]
+		if z['ts'][i]: z['parens'][i] += f'{", " if z["parens"][i] else ""}“{z["ts"][i]}”'
+		if z['poses'][i]: z['parens'][i] += f'{", " if z["parens"][i] else ""}{z["poses"][i]}'
+		if z['lits'][i]: z['parens'][i] += f'{", " if z["parens"][i] else ""}literally “{z["lits"][i]}”'
+		
+		if z['langs'][i]: z['texts'][i] = z['langs'][i]
+		if z['alts'][i]: z['words'][i] = z['alts'][i]
+		if z['words'][i]: z['texts'][i] += f' {z["words"][i]}' if z["langs"][i] else z["words"][i]
+		if i == 0 and not z['words'][i] and z['words'][i+1] : string += '+ ' # special case for suffix with no first item
+		z['texts'][i] += f' ({z["parens"][i]})' if z['parens'][i] else ''
+		if z['texts'][i]: texts.append(z['texts'][i])
+	string += ' + '.join(texts)
+
+	for k,v in z.items():
+		print(f'{k:20}', end=': {')
+		for i in range(max_len): print(f'{i}:{v[i] or "None"}, ', end='')
+		print('}')
+	return string
+
 RE_FROM = r"(?: :|,|^)(?: (?:\w|-|')+)*(?: [Ff]rom| of| [Aa]ttested| [Dd]erivative| [Pp]robably| [Pp]erhaps)(?: (?:\w|-)+)*,? ?\*?$"
 
 WIKI_API_URL = 'https://en.wiktionary.org/w/api.php?action=expandtemplates&format=json&prop=wikitext&text=' # 90 chars
@@ -330,7 +474,9 @@ def getHtmlText(html):
 	removeable_elements = soup.find_all("table", {'class':'metadata'})\
 		+ soup.find_all("div", {'class':'noprint'})\
 		+ soup.find_all('div', {'class':'NavFrame'})\
-		+ soup.find_all("table", {'class':'wikitable'})
+		+ soup.find_all("table", {'class':'wikitable'})\
+		+ soup.find_all("span", {'class':'interProject'})\
+		+ soup.find_all("sup")
 	for element in removeable_elements: 
 		element.decompose()
 	text = soup.get_text()
@@ -369,13 +515,13 @@ def test_remove_diacritics():
 	assert remove_diacritics('sagēn') == 'sagen'
 	assert remove_diacritics('изда́т') == 'издат'
 
-async def get_wikitext_async(wikitexts_list):
+async def get_wikitext_async(wikitexts_to_gather):
 	"""
 	Parent concurrent to get wikitext
 	"""
 	results = []
 	async with trio.open_nursery() as nursery:
-		for idx, wikitexts in enumerate(wikitexts_list):
+		for idx, wikitexts in  enumerate(wikitexts_to_gather):
 			nursery.start_soon(fetch, wikitexts, idx, results) # "1 to total" vs of "0 to total-1"
 	return results
 
@@ -383,7 +529,6 @@ async def fetch(wikitexts, idx, results):
 	"""
 	Child concurrent to get wikitext
 	"""
-
 	url = WIKI_API_URL + urllib.parse.quote(FILLER.join(wikitexts))
 
 	if len(wikitexts) == 1 and len(url) > PARAM_LEN_LIMIT:
@@ -449,6 +594,66 @@ def wikitext_to_delete(wikitext):
 		return True
 	return False
 
+def create_wiki_replacement_dict_via_api(wikitext:list, cache_file=None, group_bs=100, call_bs=500):
+    logging.debug(f'There are {len(wikitext)} to gather...')
+
+    wikitext_replacement_dict = {}
+    WIKI_API_URL = 'https://en.wiktionary.org/w/api.php?action=expandtemplates&format=json&prop=wikitext&text=' # 90 chars
+    PARAM_LEN_LIMIT = 8202 - len(WIKI_API_URL)
+    filler = ":::"
+    wikitext_groupings = []
+
+    steps = len(wikitext)//group_bs + 1
+    logging.info(f'Generating groups of wikitexts for api calls over {steps} steps...')
+    for step in range(steps):
+        if not step % (max(steps//100,1)): print(f'\rStep {step}', end='')
+
+        next_result_batches = []
+        next_result_batches.append(wikitext[step*group_bs:(step+1)*group_bs])
+
+        stop = False # for stopping while loop when we cant truncate more
+        while not stop and any([len(urllib.parse.quote(filler.join(b))) > PARAM_LEN_LIMIT for b in next_result_batches]):
+            replacement_batches = []
+            for b in next_result_batches:
+                if len(urllib.parse.quote(filler.join(b))) > PARAM_LEN_LIMIT:
+                    if len(b) == 1: 
+                        stop = True
+                        replacement_batches.append(b)
+                    else:
+                        replacement_batches += [s for s in [b[:len(b)//2]] + [b[len(b)//2:]]]
+                else:
+                    replacement_batches.append(b)
+            next_result_batches = replacement_batches
+
+        wikitext_groupings += next_result_batches
+
+    steps = len(wikitext_groupings)//call_bs + 1; steps
+    logging.info(f'Performing API calls on wikitext_groupings over {steps} steps...')
+    for step in range(steps):
+        print(f'\rStep {step}/{steps}: ', end='')
+        results = trio.run(get_wikitext_async, wikitext_groupings[step*call_bs:(step+1)*call_bs])
+        print(f'{len(results)} results')
+        wikitext_replacement_dict.update({r[0]: r[1] for r in results})
+        if step != steps-1: time.sleep(1)
+		# logging.info('Replacing wikitext in the sentences...')
+    return wikitext_replacement_dict
+
+def load_wikitext_cache_file(cache_file):
+	wikitext_replacement_dict = {}
+	logging.debug(f'Using cache file: {cache_file}...')
+	try:
+		with open(cache_file, 'rb+') as f:
+			wikitext_replacement_dict = pickle.load(f)
+		logging.debug(f'Found {len(wikitext_replacement_dict.keys())} wikitexts in {cache_file}...')
+		return wikitext_replacement_dict
+	except FileNotFoundError as e:
+		logging.warning(f'Unable to load from {cache_file} due to {e}. Possibly it doesnt exist and will be written to')
+
+def save_wikitext_cache_file(cache_file, data):
+	logging.debug('Saving cache file')
+	with open(cache_file, 'wb+') as f:
+		pickle.dump(data, f)
+
 def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_connection_forming=False):
 	logging.debug('Generating list of used wikitexts...')
 	wikitext_replacement_dict = {}
@@ -459,14 +664,14 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_conn
 	wikitext_list_to_delete = set(w for w in full_wikitext_list if wikitext_to_delete(w) )
 	wikitext_list_to_replace = full_wikitext_list - wikitext_list_to_delete - wikitext_list_to_ignore
 
-	if cache_file:
-		logging.debug(f'Using cache file: {cache_file}...')
-		try:
-			with open(cache_file, 'rb+') as f:
-				wikitext_replacement_dict = pickle.load(f)
-			logging.debug(f'Found {len(wikitext_replacement_dict.keys())} wikitexts in {cache_file}...')
-		except FileNotFoundError as e:
-			logging.warning(f'Unable to load from {cache_file} due to {e}. Possibly it doesnt exist and will be written to')
+	# rule_based_wikitext_replacement_dict = 
+	# wikitext_replacement_dict.update()
+	# create_rule_based_wikitext_replacement_dict(wikitext_list_to_replace)
+
+	# check cache first to allow rule_based to override
+	if cache_file: wikitext_replacement_dict.update(load_wikitext_cache_file(cache_file))
+
+	# Let the rule_based_wikitext_replacement_dict override the cached_wikitext_replacement_dict
 
 	wikitext_list_to_gather = list(set(wikitext_list_to_replace) - set(wikitext_replacement_dict.keys())) # must be list for incremental work later
 
@@ -475,49 +680,9 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_conn
 	else:
 		logging.debug(f'There are {len(wikitext_list_to_gather)} to gather...')
 
-		WIKI_API_URL = 'https://en.wiktionary.org/w/api.php?action=expandtemplates&format=json&prop=wikitext&text=' # 90 chars
-		PARAM_LEN_LIMIT = 8202 - len(WIKI_API_URL)
-		filler = ":::"
-		wikitext_groupings = []
-
-		batch_size = 100
-		steps = len(wikitext_list_to_gather)//batch_size + 1
-		logging.info(f'Generating groups of wikitexts for api calls over {steps} steps...')
-		for step in range(steps):
-			if not step % (max(steps//100,1)): print(f'\rStep {step}', end='')
-
-			next_result_batches = []
-			next_result_batches.append(wikitext_list_to_gather[step*batch_size:(step+1)*batch_size])
-
-			stop = False # for stopping while loop when we cant truncate more
-			while not stop and any([len(urllib.parse.quote(filler.join(b))) > PARAM_LEN_LIMIT for b in next_result_batches]):
-				replacement_batches = []
-				for b in next_result_batches:
-					if len(urllib.parse.quote(filler.join(b))) > PARAM_LEN_LIMIT:
-						if len(b) == 1: 
-							stop = True
-							replacement_batches.append(b)
-						else:
-							replacement_batches += [s for s in [b[:len(b)//2]] + [b[len(b)//2:]]]
-					else:
-						replacement_batches.append(b)
-				next_result_batches = replacement_batches
-
-			wikitext_groupings += next_result_batches
-
-		batch_size = 500
-		steps = len(wikitext_groupings)//batch_size + 1; steps
-		logging.info(f'Performing API calls on wikitext_groupings over {steps} steps...')
-		for step in range(steps):
-			print(f'\rStep {step}/{steps}: ', end='')
-			results = trio.run(get_wikitext_async, wikitext_groupings[step*batch_size:(step+1)*batch_size]); results;
-			print(f'{len(results)} results')
-			wikitext_replacement_dict.update({r[0]: r[1] for r in results})
-			if step != steps-1: time.sleep(1)
-			if cache_file:
-				logging.info('Saving cache file')
-				with open(cache_file, 'wb+') as f:
-					pickle.dump(wikitext_replacement_dict, f)
+		new_wikitext_replacement_dict = create_wiki_replacement_dict_via_api(wikitext_list_to_gather)
+		wikitext_replacement_dict.update(new_wikitext_replacement_dict)
+		if cache_file: save_wikitext_cache_file(cache_file, wikitext_replacement_dict)
 		
 	logging.info('Replacing wikitext in the sentences...')
 	fixed_sentences = []
@@ -531,8 +696,9 @@ def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_conn
 				sentence = sentence.replace(wikitext, '')
 			else:
 				sentence = sentence.replace(wikitext, wikitext_replacement_dict.get(wikitext,''))	
-		fixed_sentences.append(sentence.replace('()','').strip().replace(': ','').replace('\n* ', '\n '))
-#	  pdb.set_trace()
+		fixed_sentence = sentence.replace('()','').strip().replace('\n* ', '\n ') # removing - to fix IPA .replace(': ','')
+		fixed_sentences.append(fixed_sentence)
+	# pdb.set_trace()
 	return fixed_sentences
 
 def test_re_from(new_re_from=None):
@@ -750,11 +916,11 @@ class WikiProcessor(object):
 		# from dgnutils. Repair missing tables
 		if self.test:
 			logging.debug(f'TEST ENVIRONMENT, only keeping languages')
-			refresh_tables(self.cursor, ['languages']) # refresh all the tables
+			refresh_tables(self.cursor, exclude=['languages']) # refresh all the tables
 			# self.cursor.e('INSERT INTO languages SELECT * FROM etymology_explorer_prod.languages')
 			# self.cursor.e('INSERT INTO etymologies SELECT * FROM etymology_explorer_prod.etymologies LIMIT 100')
 		else:
-			refresh_tables(self.cursor, ['etymologies', 'languages'])      
+			refresh_tables(self.cursor, exclude=['etymologies', 'languages'])      
 
 	def restore_db(self, source_database):
 		"""
@@ -1266,6 +1432,32 @@ class WikiProcessor(object):
 		node_connections = self.get_nodes_from_connections(all_connections)
 		roots, descs, table_sources, entry_numbers = self.get_mysql_data_from_nodes(node_connections)
 
+	def create_etymology_snapshot(self, snapshot_file):
+		"""Create a snapshot for testing"""
+		training_examples = {}
+		for en_ety in self.en_etys_dl:
+			training_examples[en_ety['entry_id']] = {'etymology':en_ety['etymology'], 'wikitext':en_ety['wikitext']}
+		with open(snapshot_file, 'w') as f:
+			f.write(json.dumps(training_examples))
+
+	def create_all_connections_snapshot(self, snapshot_file):
+		"""Create a snapshot for testing"""
+		training_examples = {}
+		for c in self.all_connections:
+			# key is entry_id, value is list of '{start}-{end}' for set comparison
+			training_examples.setdefault(c[3], []).append(f'{c[0]}-{c[1]}')
+		with open(snapshot_file, 'w') as f:
+			f.write(json.dumps(training_examples))
+
+	def create_node_connections_snapshot(self, snapshot_file):
+		"""Create a snapshot for testing"""
+		training_examples = {}
+		for c in self.node_connections:
+			training_examples.setdefault(c[2], []).append(f'{c[0]["word"]}:{c[0]["language"]}-{c[1]["word"]}{c[1]["language"]}')
+		with open(snapshot_file, 'w') as f:
+			f.write(json.dumps(training_examples))
+
+
 
 ### END OF WIKIEXTRACTOR CLASS
 
@@ -1630,11 +1822,11 @@ def canInt(i):
 
 def getTemplateInfo(templateString):
 	all_parts = [s for s in splitParts(templateString[2:-2])]	 
-	typen, *parts = [a for a in all_parts+['']*2 if '=' not in a]
+	typen, *parts = [a for a in all_parts if '=' not in a]
 	
 	partDict = {}
-	for a in [a for a in all_parts if '=' in a[1:-1]]: #don't use it if = is first or last
-		item = a.split('=')
+	for a in [a for a in all_parts if re.search('^\w+=',a)]: #don't use it if = is first or last
+		item = a.split('=',1)
 		partDict[item[0]] = item[1]
 
 	# For adding numbered items into the parts array
