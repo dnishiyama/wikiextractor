@@ -1,5 +1,3 @@
-tests/wikiextractor_test_dir/input/
-tests/wikiextractor_test_dir/output/
 output_test/
 local/
 tmp/
