@@ -137,7 +137,7 @@ MISSING_LANG_DICT = {
 	'kg': 'Kongo',
 	'omq-otp-pro': "Proto-Oto-Pamean",
 	'ira-mid': 'Middle Iranian',
-	'ML': 'Medieval Latin',
+	'ML': 'Medieval Latin', # TODO: Allow this one to link to normal Latin
 	'Medieval Greek': 'Byzantine Greek',
 	'aat': 'Arvanitika Albanian',
 	'fa-cls': 'Classical Persian',
@@ -657,6 +657,7 @@ def save_wikitext_cache_file(cache_file, data):
 def multi_parse_wikitext_sentences(sentences: list, cache_file=None, ignore_connection_forming=False):
 	logging.debug('Generating list of used wikitexts...')
 	wikitext_replacement_dict = {}
+	# TODO: Could use mwparserfromhell here much easier
 	full_wikitext_list = set(s[s_i[0]:s_i[1]] for s in sentences for s_i in findMatchingBraces(s)) 
 	# ignore some wikitext since they aren't useful in etymologies (e.g. LDL, en-noun, wikispecies)
 	wikitext_list_to_ignore = set(w for w in full_wikitext_list if ignore_connection_forming and wikitext_is_connection_forming(w))
@@ -956,6 +957,7 @@ class WikiProcessor(object):
 
 		self.insert_unmatched_words_into_mysql()
 		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers)
+		# TODO: Make the secondary databases here
 		if commit:
 			self.conn.commit()
 
@@ -1261,13 +1263,13 @@ class WikiProcessor(object):
 	#			  clear_output()
 		#			  raise Exception()
 		
-
-
-	def getNodesFromTemplate(self, templateString, nodeType):
+	def getNodesFromTemplate(self, templateString, nodeType, allow_non_connections=False):
 		""" 
 		{{inh|gd|sga|ech}} => {word:ech, language:'German', } 
 		If this is a descendant, then only provide the main word
-		Need to implement: 'w', 'cognate', 'cog', 'doublet', others?
+		Need to implement: 'cognate', 'cog', 'doublet', others?
+		# TODO: Convert this into two functions, one for getting the data about a template (alt, gloss, word, lang, etc), 
+		and another for making nodes
 		"""
 		nodes = []
 		typen, parts, partDict = getTemplateInfo(templateString)
@@ -1330,7 +1332,11 @@ class WikiProcessor(object):
 			nodes.append({'word': parts[0], 'language': 'Japanese'})
 
 		elif typen in ['cog', 'cognate']:
-			raise CognateError('No connections should be made for cognates')
+			if not allow_non_connections:
+				raise CognateError('No connections should be made for cognates when allow_non_connections = false')
+			else:
+				nodes.append({'word': parts[1] or parts[2], 'language': self.language_dict[parts[0]]})
+
 		else:
 			raise Exception('No match!')
 			
@@ -1343,6 +1349,7 @@ class WikiProcessor(object):
 		return nodes
 
 	def getOrCreateIdWithDict(self, word, lang):
+		# TODO: Check for language switches like "Medieval Latin" -> "Latin"
 		unmatched_word = None
 		word = clean_word(word) # removes asterisk and other issues
 		try:
@@ -1377,6 +1384,7 @@ class WikiProcessor(object):
 		return roots, descs, table_sources, entry_numbers
 
 	def insert_unmatched_words_into_mysql(self):
+		# TODO: Check all these for opportunities to improve word recognition
 		if not self.unmatched_words or len(self.unmatched_words) == 0:
 			logging.info(f'Found no unmatched words. Returning...')
 			return 
