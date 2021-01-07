@@ -943,6 +943,8 @@ class WikiProcessor(object):
 		"""
 		self.initialize_db()
 
+		self.update_language_db() # get languages tags from Wiktionary
+
 		# Initialization of reused dictionaries
 		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
 		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
@@ -1203,15 +1205,25 @@ class WikiProcessor(object):
 
 	def get_nodes_from_connections(self, all_connections):
 		logging.info(f'Converting connections into nodes...')
+		indexErrors = []
+		keyErrors = []
 		nodeConnections = []
 		for i, connection in enumerate(all_connections):
 	#		  if i % 50000 == 0: print(f'\r{i}/{len(all_connections)}', end='')
 			try:
 				nodeConnections += self.getNodeConnections(connection)
 			except KeyError as k:
-				print(f'KeyError in getNodeConnections: {k}')
+				keyErrors.append(connection)
+				# print(f'KeyError in getNodeConnections for', connection, k)
+			except IndexError as i:
+				indexErrors.append(connection)
+				# print(f'IndexError in getNodeConnections for', connection, i)
 	#	  nodeConnections[2003]
-		if self.store_intermediates: self.node_connections = nodeConnections
+		logging.info(f'Encountered {len(keyErrors)} keyErrors, and {len(indexErrors)} indexErrors, storing: {self.store_intermediates}')
+		if self.store_intermediates: 
+			self.node_connections = nodeConnections
+			self.connectionIndexErrors = indexErrors
+			self.connectionKeyErrors = keyErrors
 		return nodeConnections
 		# if del_after: del all_connections
 
@@ -1272,7 +1284,7 @@ class WikiProcessor(object):
 		and another for making nodes
 		"""
 		nodes = []
-		typen, parts, partDict = getTemplateInfo(templateString)
+		typen, parts, partDict = getTemplateInfo(templateString, pad_parts=4)
 		
 		if typen == 'eeStart': 
 			nodes.append({'word': parts[1], 'language': parts[0]})
@@ -1282,12 +1294,18 @@ class WikiProcessor(object):
 		
 		# (1) language, (2) word
 		elif typen in ['inh', 'inherited', 'der', 'derived', 'bor', 'borrowed', 'learned borrowing', 'lbor']: 
-			nodes.append({'word': parts[2] or parts[3], 'language': self.language_dict[parts[1]]})
+			# Sometimes there is only a tr= (transliteration) otherwise parts[3] gets it 
+			#looks like sort is better than tr when possible (Japanese|船)
+			word = parts[2] or parts[3] or partDict.get('alt') or partDict.get('sort') or partDict.get('tr')
+			if not word: raise IndexError()
+			nodes.append({'word': word, 'language': self.language_dict[parts[1]]})
 		
 		# (0) language, (1) word
 		elif typen in ['l', 'link', 'm', 'mention']: 
 	#		  if parts[1] == '': #{{m|la||*brabus}} from bravo Galician
-			nodes.append({'word': parts[1] or parts[2], 'language': self.language_dict[parts[0]]})
+			word = parts[1] or parts[2] or partDict.get('alt') or partDict.get('sort') or partDict.get('tr')
+			if not word: raise IndexError()
+			nodes.append({'word': word, 'language': self.language_dict[parts[0]]})
 		
 		# (0) language, multiple words
 		elif typen in ['com', 'compound', 'affix', 'af', 'confix']: 
@@ -1306,14 +1324,15 @@ class WikiProcessor(object):
 		# (0) language, (1) root, (2) suffix [not in descendant nodeType]
 		elif typen in ['suffix', 'suf']: 
 			nodes.append({ 'word': parts[1], 'language': self.language_dict[partDict.get('lang1', parts[0])] })
-			if nodeType == 'root':
+			if nodeType == 'root' and parts[2]:
 				nodes.append({ 'word': parts[2], 'language': self.language_dict[partDict.get('lang2', parts[0])] })
 		
 		# (0) language, (1) prefix [not in descendant nodeType], (2) root 
 		elif typen in ['prefix', 'pre']: 
 			if nodeType == 'root':
 				nodes.append({ 'word': parts[1], 'language': self.language_dict[partDict.get('lang1', parts[0])] })
-			nodes.append({ 'word': parts[2], 'language': self.language_dict[partDict.get('lang2', parts[0])] })
+			if parts[2]: # Sometimes prefixes just have the one word
+				nodes.append({ 'word': parts[2], 'language': self.language_dict[partDict.get('lang2', parts[0])] })
 		
 		# (0) word, language = "Hebrew"
 		elif typen in ['he-m', 'he-l']: 
@@ -1465,6 +1484,59 @@ class WikiProcessor(object):
 		with open(snapshot_file, 'w') as f:
 			f.write(json.dumps(training_examples))
 
+	def update_language_db(self):
+		mysql_lang_items = self.cursor.d('SELECT * FROM languages')
+		mysql_lang_codes = set(m['language_code'] for m in mysql_lang_items)
+		mysql_lang_set = set(
+			(w['language_code'], w['language_name']) 
+			for w 
+			in mysql_lang_items
+		)
+		logging.debug(f'Found {len(mysql_lang_items)} existing language_items in mysql')
+		logging.debug(f'Found {len(mysql_lang_codes)} existing language_codes in mysql')
+		
+		
+		wikt_lang_codes = get_wiktionary_lang_info()
+		wikt_lang_items = []
+		for item in wikt_lang_codes:
+			for code in item['code'].split(','):
+				# No longer ignoring codes like English
+	#             if not re.match('^[a-z-]+$', code) and not re.match('^[A-Z\.]+$', code): continue 
+				wikt_lang_items += [{
+					'language_name': item['canonical name'],
+					'language_code': code,
+					'key_language': True,
+				}]
+				wikt_lang_items += [
+					{
+						'language_name': l,
+						'language_code': code,
+						'key_language': False,
+					} 
+					for l in item.get('other names','').split(',') if l
+				]
+		
+		logging.debug(f'Found {len(wikt_lang_codes)} language_codes in wiktionary')
+		logging.debug(f'Found {len(wikt_lang_items)} to language_items in wiktionary')
+		
+		new_mysql_lang_items = [
+			w for w in wikt_lang_items 
+			if (w['language_code'], w['language_name']) not in mysql_lang_set
+		]
+		logging.debug(f'Found {len(new_mysql_lang_items)} new items')
+		
+		key_check = {}
+		for lang_item in new_mysql_lang_items + mysql_lang_items:
+			key_check[lang_item['language_code']] = key_check.setdefault(lang_item['language_code'],False) or lang_item['key_language']
+		no_key = [k for k,v in key_check.items() if not v]
+		if no_key:
+			raise Exception(f'No key found for {no_key}')
+		
+		if new_mysql_lang_items:
+			self.cursor.dict_insert(new_mysql_lang_items, 'languages')
+			logging.info(f'Inserted {len(new_mysql_lang_items)} new items into languages table')
+		return new_mysql_lang_items
+		
 
 
 ### END OF WIKIEXTRACTOR CLASS
@@ -1828,9 +1900,18 @@ def canInt(i):
 		return True
 	except: return False
 
-def getTemplateInfo(templateString):
+def getTemplateInfo(templateString, pad_parts=0):
+	"""
+	pad_parts: default 0, lengths the parts array to a min length
+	returns 
+		typen (the template name ie inh)
+		parts (an array of the items without an "=")
+		partDict (a dict of all items with "=")
+	"""
 	all_parts = [s for s in splitParts(templateString[2:-2])]	 
 	typen, *parts = [a for a in all_parts if '=' not in a]
+	
+	parts += [''] * (pad_parts - len(parts)) # append blanks to help with parsing -1 results in []
 	
 	partDict = {}
 	for a in [a for a in all_parts if re.search('^\w+=',a)]: #don't use it if = is first or last
@@ -2008,6 +2089,21 @@ def append_page_onto_wiki_test(page, test_file_path):
 			file.seek(pos, os.SEEK_SET)
 			file.truncate()
 		file.writelines(page + ['</mediawiki>']) # Add the new page
+
+def get_wiktionary_lang_info():
+	"""Returns a list of dictionaries"""
+	DEFAULT_LANG_URL = 'https://en.wiktionary.org/wiki/Wiktionary:List_of_languages,_csv_format'
+	ETY_ONLY_LANG_URL = 'https://en.wiktionary.org/wiki/Wiktionary:Etymology-only_languages,_csv_format'
+	lang_items=[]
+	for url in [DEFAULT_LANG_URL, ETY_ONLY_LANG_URL]:
+		resp = requests.get(url)
+		soup = bs4.BeautifulSoup(resp.text, 'lxml')
+		csv_elem = next(iter([s for s in soup.find_all('pre') if 'canonical name' in s.text]),None)
+		if not csv_elem: raise Exception("Could not find the table")
+		columns, *data = [c.split(';') for c in csv_elem.text.split('\n')];
+		for d in data:
+			lang_items.append({k:v for k,v in zip(columns, d)})
+	return lang_items
 
 
 # }}}
