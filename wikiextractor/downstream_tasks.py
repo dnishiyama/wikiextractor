@@ -53,27 +53,15 @@ RESTART_TEXTS = [
 	', alternatively from ',
 ]
 
-RE_NON_WIKI_PAREN = r'' + \
-r'(?<=\W)' + \
-r'\([^()]*\)'+ \
-r'(?=\W|$)' + \
-r'(?![^{]*})'
-RE_NON_WIKI_PAREN = r'(?:(?<=\W)|^)\([^()]*\)(?=\W|$)(?![^{]*})'
-RE_UNCLOSED_PAREN = r'\([^\)]*?$' # unclosed paren
-
 # Regex for starting clauses
 RE_STARTING_CLAUSE = r"^(?:[^{}\n]+)(?: \[^{}\n]+ ?(?::|;|\.)?)* ?(?::|;|\.) "
 def remove_starting_clauses(text):
 	return re.sub(RE_STARTING_CLAUSE, '', text)
 
-# Regex for starting clauses
+# Regex to replace wikis that don't provide anything but languages or nothing.
 RE_LONE_WIKI = r"{{etyl\|\S+?\|\S+?}}|{{(?:inh|der|bor)\|[^|]+?\|[^|]+?(?:\||\|-)?}}|{{(?:qualifier|circa|glossary|unk)\|[^{}]*?}}"
 def remove_lone_wikis(text):
 	return re.sub(RE_LONE_WIKI, '__wiki__', text)
-
-RE_BULLET = r"[^ ]*BULLET::::- ?"
-RE_CONFER = r"^Cf\.(?= )"
-# RE_QUOTES = r"\"(\w+)\"(?![^{]*})"
 
 SINGLE_PATH_TYPES = [
 	'inherited', 'inh',
@@ -771,6 +759,8 @@ test_from_str()
 test_re_cognate()
 test_re_from()
 
+RE_NON_WIKI_PAREN = r'(?:(?<=\W)|^)\([^()]*\)(?=\W|$)(?![^{]*})'
+RE_UNCLOSED_PAREN = r'\([^\)]*?$' # unclosed paren
 def remove_matching_parens(text):
 	""" Also remove unmatching parens! """
 	wikitext_keys = {}
@@ -797,19 +787,58 @@ def remove_matching_parens(text):
 		text = text.replace(k,v)
 	return text
 
+# RE_QUOTES = r"\"(\w+)\"(?![^{]*})"
+
+RE_BULLET = r"[^ ]*BULLET::::- ?"
 def replace_bullets(text): return re.sub(RE_BULLET, '', text)
+
+RE_CONFER = r"^Cf\.(?= )"
 def replace_cf(text): return re.sub(RE_CONFER, 'Compare', text)
+
+RE_ADJACENT_PUNCTUATION = r'([,.!?;:])([^ ])' # "g1 g2"  # worried about ".com" or something
+RE_STRANDED_PUNCTUATION = r' ([,.!?;:] )' # leave only group 1 
+RE_EXTRA_SPACES = r' {2,}'
+def fix_broken_punctuation(text): 
+	"""
+	' , ' => ', '
+	same for . : ; ? !
+	This is before the initial ':'
+	"""
+	text = re.sub(RE_EXTRA_SPACES, ' ', text) # remove extra spaces
+	text = re.sub(RE_ADJACENT_PUNCTUATION, r'\1 \2', text) # 
+	text = re.sub(RE_STRANDED_PUNCTUATION, r'\1', text) # 
+	return text
+
+RE_REMOVE_COGNATES_1 = r'(?:and|thus|and thus|[.;,]) (?:[Rr]elate|[Cc]ognate|[Ss]ee )[^.;]*([.;]|$)'
+RE_REMOVE_COGNATES_2 = r'^(?:[Rr]elate|[Cc]ognate|[Ss]ee )[^.;]*([.;]|$)'
+def remove_cognates(text):
+    text = re.sub(RE_REMOVE_COGNATES_1, r'\1', text)
+    text = re.sub(RE_REMOVE_COGNATES_2, '', text)
+    return text
 	
 def preprocess_etymology(etymology):
-	etymology = etymology.replace(u'\xa0', u' ').replace('\n', ' '); etymology
-	etymology = replace_bullets(etymology); etymology
-	etymology = remove_matching_parens(etymology); etymology
-	etymology = remove_lone_wikis(etymology); etymology
-	etymology = replace_cf(etymology); etymology
-	etymology = remove_starting_clauses(etymology); etymology
+	etymology = remove_cognates(etymology) # delete phrases (to punctuation) that say "cognates" or "related to"
+	etymology = etymology.replace(u'\xa0', u' ').replace('\n', ' '); etymology # replace weird items
+	etymology = replace_bullets(etymology); etymology # Replace the bullets from wikiextractor
+	etymology = remove_matching_parens(etymology); etymology # remove parenthetical statements
+	etymology = remove_lone_wikis(etymology); etymology # Replace some wikis with __wiki__
+	etymology = replace_cf(etymology); etymology # Replace Cf. with Confer
+	etymology = remove_starting_clauses(etymology); etymology # Remove things like Coined in 1910
+	etymology = fix_broken_punctuation(etymology); etymology # fix stranded, and duplicated punctuation
 	return etymology
 
 def test_all_text_items():
+	# assert remove_cognates('Probably {{m|mkh}} , from {{m|mkh}}, cognates with banana.') == 'Probably {{m|mkh}} , from {{m|mkh}}.'
+	# assert remove_cognates('. from banana and thus cognates with banan.') == '. from banana and .'
+	# assert remove_cognates('From {{test}}, from {{test}}, and related to {{test}}; test') == 'From {{test}}, from {{test}}, ; test'
+	# assert remove_cognates('See more at banana.') == '.'
+	assert remove_cognates('Probably {{m|mkh}} , from {{m|mkh}}, cognates with banana.') == 'Probably {{m|mkh}} , from {{m|mkh}}.'
+	assert remove_cognates('From banana and thus cognates with banan.') == 'From banana .'
+	assert remove_cognates('From {{test}}, from {{test}}, and related to {{test}}; test') == 'From {{test}}, from {{test}}, ; test'
+	assert remove_cognates('See more at banana.') == ''
+	assert fix_broken_punctuation('Probably {{m|mkh}} , from {{m|mkh}}') == 'Probably {{m|mkh}}, from {{m|mkh}}'
+	assert fix_broken_punctuation('Probably {{m|mkh}}, from {{m|mkh}}') == 'Probably {{m|mkh}}, from {{m|mkh}}'
+	assert fix_broken_punctuation('{{cog|crh|kim}} ,{{cog|krc|ким|tr=kim}}') == '{{cog|crh|kim}}, {{cog|krc|ким|tr=kim}}'
 	assert remove_starting_clauses('1670s: variant of ') == 'variant of '
 	assert remove_starting_clauses('UK C16. blag blag. Probably from ') == 'Probably from '
 	assert remove_starting_clauses('UK C16. blag __language__ blag. Probably from ') == 'Probably from '
@@ -844,11 +873,15 @@ def test_all_text_items():
 	assert remove_matching_parens('test {{((test) test (test))}} test') == 'test {{((test) test (test))}} test'
 	assert remove_matching_parens('wine (possibly {{der|(a wine)}}) {{test}}') == 'wine {{test}}'
 	assert remove_matching_parens('Probably {{m|mkh}}, from {{m|mkh}}') == 'Probably {{m|mkh}}, from {{m|mkh}}' # duplicate items is weird
+	# struggled with ' ' before punctiation. Handle this in fix_stranged_puncutation
+	assert remove_matching_parens('Probably {{m|mkh}} ({{test}}), from {{m|mkh}}') == 'Probably {{m|mkh}} , from {{m|mkh}}' 
 	assert preprocess_etymology('BULLET::::- from {{inh|en|enm|kit}},') == 'from {{inh|en|enm|kit}},'
 #	  assert special_replacements('from {{"test"}} test {{test|test}} "test"') == 'from {{"test"}} test {{test|test}} {{eeQuote|test}}'
 	assert preprocess_etymology('BULLET::::-Cf. banana') == 'Compare banana'
 	assert preprocess_etymology('(1835) super info. from\xa0banana ') == 'from banana'
 	assert preprocess_etymology(' : From the Interlingua-English Dictionary.\nFrom ') == 'From'
+	assert preprocess_etymology(' : From the Interlingua-English Dictionary.\nFrom ') == 'From'
+	assert preprocess_etymology('Probably {{m|mkh}} ({{test}}), from {{m|mkh}}') == 'Probably {{m|mkh}}, from {{m|mkh}}'
 test_all_text_items()	 
 
 # Regex identifier for parens
@@ -955,21 +988,54 @@ class WikiProcessor(object):
 		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
 		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
 		node_connections = self.get_nodes_from_connections(all_connections)
-		roots, descs, table_sources, entry_numbers = self.get_mysql_data_from_nodes(node_connections)
+		roots, descs, table_sources, entry_numbers, places = self.get_mysql_data_from_nodes(node_connections)
 
 		self.insert_unmatched_words_into_mysql()
-		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers)
+		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers, places)
 		# TODO: Make the secondary databases here
 		if commit:
 			self.conn.commit()
+
+	def process_single_word(self, word):
+		"""
+		Go through the full process (from extracted dump to mysql items)
+		No insertion into mysql
+		does not return anything. Use with store intermediates
+		"""
+		processed_wikidump = {}
+
+		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
+		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
+
+		# Grab data from the dump (choose which dump)
+		logging.info('Searching through dump (can take a minute)...')
+		wiki_dump_path = self.input_path + self.dump_file_name
+		data = get_data_from_title(word, wiki_dump_path); data
+
+		# convert that data into the objects
+		processed_wikidump[word] = data
+		self.processed_wikidump = processed_wikidump
+		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl =\
+			self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
+
+		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
+
+		self.en_dict = {e['entry_id']:e['entry_number'] for e in en_conns_dl}
+
+		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
+		# Show the objects
+
+		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
+		node_connections = self.get_nodes_from_connections(all_connections)
+		roots, descs, table_sources, entry_numbers, places = self.get_mysql_data_from_nodes(node_connections)
 
 	def get_connections_from_single_wikitext(self, wikitext, store_intermediates=False):
 		self.store_intermediates = store_intermediates
 		self.load_language_dict()
 		logging.warning('Need to add the function to replace non-etymology template')
-		wtp = self.get_wikitext_part_array([{'wikitext': wikitext, 'language_name': 'test_language', 'word': 'test_word'}])
+		wtp = get_wikitext_parts_dict(**{'wikitext': wikitext, 'language_name': 'start_language', 'word': 'start_word', 'entry_id': 0})
 		logging.debug(wtp)
-		conns, _ = self.get_connections_from_wikitext_parts(wtp); conns
+		conns, _ = get_entry_connections(wtp); conns
 		logging.debug(conns)
 		node_conns = self.get_nodes_from_connections(conns); node_conns
 		logging.debug(node_conns)
@@ -1176,8 +1242,11 @@ class WikiProcessor(object):
 		return en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl
 
 	def get_wikitext_part_array(self, en_etys_dl):
+		"""
+		:param: en_etys_dl (list of {wikitext, language_name, word, entry_id, (_id not needed for this fn)})
+		"""
 		logging.info(f'Gathering wikitext parts for {len(en_etys_dl)} entries...')
-		wikitext_part_array = [get_wikitext_parts_dict(entry) for entry in en_etys_dl if entry['wikitext']]
+		wikitext_part_array = [get_wikitext_parts_dict(**entry) for entry in en_etys_dl if entry['wikitext']]
 		if self.store_intermediates: self.wikitext_part_array = wikitext_part_array
 		return wikitext_part_array
 
@@ -1228,7 +1297,7 @@ class WikiProcessor(object):
 		# if del_after: del all_connections
 
 	def getNodeConnections(self, connection):
-		desc, root, conn_type, entry_id = connection
+		desc, root, conn_type, place, entry_id  = connection
 		try:
 			if conn_type == 'cog': raise CognateError
 				
@@ -1238,7 +1307,7 @@ class WikiProcessor(object):
 			if len(rootNodes) >= 2 and len(descNodes) >= 2:
 				raise MultiConnectionError
 				
-			return [[di, ri, entry_id] for di in descNodes for ri in rootNodes]
+			return [[di, ri, entry_id, place] for di in descNodes for ri in rootNodes]
 
 		except MultiConnectionError as m:
 			print('MultiConnectionError!')
@@ -1386,8 +1455,8 @@ class WikiProcessor(object):
 
 	def get_mysql_data_from_nodes(self, node_connections):
 		
-		roots = []; descs = []; table_sources = []; entry_numbers = [];
-		for i, (desc, root, entry_id) in enumerate(node_connections):
+		roots = []; descs = []; table_sources = []; entry_numbers = []; places = []
+		for i, (desc, root, entry_id, place) in enumerate(node_connections):
 			desc_id = self.getOrCreateIdWithDict(desc['word'], desc['language'])
 			root_id = self.getOrCreateIdWithDict(root['word'], root['language'])
 
@@ -1395,12 +1464,15 @@ class WikiProcessor(object):
 			descs.append(desc_id)
 			table_sources.append(entry_id)
 			entry_numbers.append(self.en_dict[entry_id])
+			places.append(place)
 
-		if self.store_intermediates: self.roots = roots
-		if self.store_intermediates: self.descs = descs
-		if self.store_intermediates: self.table_sources = table_sources
-		if self.store_intermediates: self.entry_numbers = entry_numbers
-		return roots, descs, table_sources, entry_numbers
+		if self.store_intermediates: 
+			self.roots = roots
+			self.descs = descs
+			self.table_sources = table_sources
+			self.entry_numbers = entry_numbers
+			self.places = places
+		return roots, descs, table_sources, entry_numbers, places
 
 	def insert_unmatched_words_into_mysql(self):
 		# TODO: Check all these for opportunities to improve word recognition
@@ -1417,11 +1489,16 @@ class WikiProcessor(object):
 			**value_dict
 		)
 
-	def insert_connections_into_mysql(self, roots, descs, table_sources, entry_numbers):
+	def insert_connections_into_mysql(self, roots, descs, table_sources, entry_numbers, places):
 		logging.info(f'Found {len(roots)} connection_sources. Inserting...')
 		# Connection sources 1.5min
-		insert(self.cursor, 'connection_sources', many=True, 
-			**{'root':roots,'descendant':descs,'table_source':table_sources,'entry_number':entry_numbers})
+		insert(self.cursor, 'connection_sources', many=True, **{
+			'root':roots, 
+			'descendant':descs, 
+			'table_source':table_sources,
+			'entry_number':entry_numbers, 
+			'place': places
+		})
 
 		# Connection data 1 min
 		# make a set for roots, desc
@@ -1430,34 +1507,6 @@ class WikiProcessor(object):
 		descs_set = [s[1] for s in conn_set]
 		logging.info(f'Found {len(roots_set)} connection_sources. Inserting...')
 		insert(self.cursor,'connections',ignore=True,many=True, **{'root':roots_set,'descendant':descs_set,})
-
-	def process_single_word(self, word):
-		processed_wikidump = {}
-
-		if not self.wl_2_id or not self.next_wl_2_id: self.load_wl_2_id_values()
-		if not self.language_dict: self.load_language_dict(); #self.language_dict['qfa-adm-pro']
-
-		# Grab data from the dump (choose which dump)
-		logging.info('Searching through dump (can take a minute)...')
-		wiki_dump_path = self.input_path + self.dump_file_name
-		data = get_data_from_title(word, wiki_dump_path); data
-
-		# convert that data into the objects
-		processed_wikidump[word] = data
-		self.processed_wikidump = processed_wikidump
-		en_conns_dl, en_etys_dl, en_pos_dl, en_prons_dl, en_defs_dl, etys_dl =\
-			self.create_mysql_data_from_processed_wikiextraction_data(processed_wikidump, log=False)
-
-		en_prons_dl, en_etys_dl, en_defs_dl = self.parse_wikitext_all(en_prons_dl, en_etys_dl, en_defs_dl)
-
-		self.en_dict = {e['entry_id']:e['entry_number'] for e in en_conns_dl}
-
-		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
-		# Show the objects
-
-		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
-		node_connections = self.get_nodes_from_connections(all_connections)
-		roots, descs, table_sources, entry_numbers = self.get_mysql_data_from_nodes(node_connections)
 
 	def create_etymology_snapshot(self, snapshot_file):
 		"""Create a snapshot for testing"""
@@ -1541,13 +1590,17 @@ class WikiProcessor(object):
 
 ### END OF WIKIEXTRACTOR CLASS
 
-def get_wikitext_parts_dict(entry):
+def get_wikitext_parts_dict(wikitext, language_name, word, entry_id, **kwargs):
+	"""
+	Changed to take named params on 1-8-21
+	Take kwargs to avoid unnamed params issues
+	"""
 	# Create an appended starting etymology
-	etymology = preprocess_etymology(entry.get('wikitext', ''))
+	etymology = preprocess_etymology(wikitext)
 
 #	  if etymology == '': raise Exception() # not an issue? https://en.wiktionary.org/wiki/%EB%88%84%EB%A5%B4%EB%8B%A4
 	connector = " : "
-	starting_wikitext = "{{eeStart|" + entry['language_name'] + "|"+entry['word']+"}}"
+	starting_wikitext = "{{eeStart|" + language_name + "|" + word + "}}"
 	etymology = starting_wikitext + connector + etymology
 	
 	# initial value
@@ -1562,7 +1615,7 @@ def get_wikitext_parts_dict(entry):
 			wikitext = wikitext[:2] + '_' + wikitext[2:] # Make it a unique item for the dict
 			
 		wikitext_parts_dict[wikitext] = {
-			'entry_id': entry.get('entry_id',None),
+			'entry_id': entry_id,
 			'preceding_text': etymology[cur:s],
 			'wikitype': splitParts(re.sub(RE_FIX_WIKITEXT, '', wikitext)[2:-2])[0], # remove _ from type
 			'place': i, #order in the etymology
@@ -1578,7 +1631,7 @@ def get_wikitext_parts_dict(entry):
 	return wikitext_parts_dict
 
 item = {'entry_id': 496,'wikitext': 'Probably {{m|mkh-okm|hvat}}, from {{m|mkh-okm|hvat}}','new_connections': 0,'connection_code': '','relative_code': None,'has_errors': 0,'lock_code': 0,'etymology_id': 1564328,'ec.entry_id': 496,'entry_number': 3,'_id': 1564328,'word': 'วัด','language_name': 'Thai','frequencies': None,'common_descendant': '','simple_definition': None}
-#assert '{{_m|mkh-okm|hvat}}' in get_wikitext_parts_dict(item) # Must have the _ working<Paste>
+#assert '{{_m|mkh-okm|hvat}}' in get_wikitext_parts_dict(**item) # Must have the _ working<Paste>
 
 
 def get_entry_connections(wikitext_parts, verbose=False):
@@ -1613,7 +1666,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 
 	for j, wikitext_live in enumerate(wikitexts[1:]): # Skip the first since it is the start
 		
-		if logging.getLogger().getEffectiveLevel() < 20:
+		if logging.getLogger().getEffectiveLevel() < 20: #debug is 10, info is 20, 
 			wikitext = json.loads(json.dumps(wikitext_live)) # To avoid changing the live version for debugging
 		else:
 			wikitext = wikitext_live
@@ -1663,7 +1716,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 #			  log(f'### Ignoring_2 EQUIVALENT_TEXTS {i}: {wikitext}')
 #			  for p in preceding_wikitext_array:
 #				  for p_p in wikitext_parts[p].get('preceding_wikitext_array',[]):
-#					  connections.append([p_p, wikitext, wikitype])
+#					  connections.append([p_p, wikitext, wikitype, place])
 #			  for f in following_wikitext_array:
 #				  wikitext_parts[f]['preceding_wikitext_array'] += preceding_wikitext_array
 #			  context.append(['EQUIVALENT', 'SINGLE_PATH']) # is equivalent needed?
@@ -1678,7 +1731,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif wikitype in RESTART_TYPES and preceding_text in RESTART_TEXTS:
 #			  log(f'### RESTART TEXTS {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, wikitype])
+#			  connections.append([starting_wikitext, wikitext, wikitype, place])
 #			  context.append(['RESTART'])
 
 			
@@ -1686,7 +1739,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif 'BRANCH' in context[-1] and wikitype in BRANCH_TYPES and preceding_text in BRANCH_TEXTS:
 #			  log(f'### BRANCH CONTINUATION {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, wikitype])
+#			  connections.append([starting_wikitext, wikitext, wikitype, place])
 #			  context.append(['RESTART'])
 
 			
@@ -1695,7 +1748,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		if wikitype in COGNATE_TYPES \
 				or (cognate_str(preceding_text) and wikitype in SINGLE_PATH_TYPES):
 			log(f'### COGNATE NEW {j}: {wikitext}')
-			connections.append([starting_wikitext, wikitext, 'cog'])
+			connections.append([starting_wikitext, wikitext, 'cog', place])
 			context.append(['COGNATE'])
 #			  pdb.set_trace()
 			
@@ -1704,7 +1757,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif has_cognate() and wikitype in COGNATE_TYPES:
 #			  log(f'### COGNATE CONTINUE {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, 'cog'])
+#			  connections.append([starting_wikitext, wikitext, 'cog', place])
 #			  context.append(['COGNATE'])
 			
 		
@@ -1716,7 +1769,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 			if from_str(preceding_text): # If it is "... from ..."
 				log(f'# single path, SINGLE_PATH_TEXTS {j}: {wikitext}')
 				for p in preceding_wikitext_array:
-					connections.append([p, wikitext, wikitype])
+					connections.append([p, wikitext, wikitype, place])
 				context.append(['SINGLE_PATH'])
 			
 			# SIMPLE BRANCH
@@ -1727,7 +1780,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 					p_p_wikitext_array = wikitext_parts[p].get('preceding_wikitext_array', [])
 					wikitext_parts[wikitext]['preceding_wikitext_array'] = p_p_wikitext_array
 					for p_p in p_p_wikitext_array: 
-						connections.append([p_p, wikitext, wikitype])
+						connections.append([p_p, wikitext, wikitype, place])
 				context.append(['BRANCH'])
 				
 			else:
@@ -1747,7 +1800,15 @@ def get_entry_connections(wikitext_parts, verbose=False):
 				no_match_before_connection = True
 				missed_parts.append({**wikitext_parts[wikitext], 'wikitext': wikitext})
 			entry_id = list(wikitext_parts.values())[0]['entry_id']
-			connections = [[*[re.sub(RE_FIX_WIKITEXT, '', ci) for ci in c], entry_id] for c in connections]
+			connections = [
+				[
+					re.sub(RE_FIX_WIKITEXT, '', c[0]),
+					re.sub(RE_FIX_WIKITEXT, '', c[1]),
+					c[2], # wikitype
+					c[3], # place
+					entry_id # add entry_id
+				] for c in connections
+			]
 			return connections, missed_parts
 			
 		elif False:
@@ -1767,7 +1828,15 @@ def get_entry_connections(wikitext_parts, verbose=False):
 #			  raise Exception('No match')
 
 	entry_id = list(wikitext_parts.values())[0]['entry_id']
-	connections = [[*[re.sub(RE_FIX_WIKITEXT, '', ci) for ci in c], entry_id] for c in connections]
+	connections = [
+		[
+			re.sub(RE_FIX_WIKITEXT, '', c[0]),
+			re.sub(RE_FIX_WIKITEXT, '', c[1]),
+			c[2], # wikitype
+			c[3], # place
+			entry_id # add entry_id
+		] for c in connections
+	]
 	return connections, missed_parts
 
 
@@ -1781,7 +1850,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 # 	"""
 # 	# try:
 # 	entry = cursor.d(sql_stmt, _id)[0]; entry
-# 	wtp = get_wikitext_parts_dict(entry); wtp
+# 	wtp = get_wikitext_parts_dict(**entry); wtp
 # 	c, missing_parts = get_entry_connections(wtp); c
 # 	nodeConnections = [cj for ci in c for cj in getNodeConnections(ci, cursor)]
 # 	return nodeConnections
@@ -1797,7 +1866,7 @@ def getIndexForWordAndLanguage(word, lang, data):
 # #	  singleNodeConnections = []
 # # data comes from mysql
 # 	entry = data[idx]; entry
-# 	wtp = get_wikitext_parts_dict(entry); wtp
+# 	wtp = get_wikitext_parts_dict(**entry); wtp
 # 	c, missing_parts = get_entry_connections(wtp); c
 # 	return [cj for ci in c for cj in getNodeConnections(ci, cursor)]
 
