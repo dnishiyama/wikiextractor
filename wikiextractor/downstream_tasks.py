@@ -988,10 +988,10 @@ class WikiProcessor(object):
 		wikitext_part_array = self.get_wikitext_part_array(en_etys_dl) # 
 		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
 		node_connections = self.get_nodes_from_connections(all_connections)
-		roots, descs, table_sources, entry_numbers, places = self.get_mysql_data_from_nodes(node_connections)
+		roots, descs, table_sources, entry_numbers, places, confidences = self.get_mysql_data_from_nodes(node_connections)
 
 		self.insert_unmatched_words_into_mysql()
-		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers, places)
+		self.insert_connections_into_mysql(roots, descs, table_sources, entry_numbers, places, confidences)
 		# TODO: Make the secondary databases here
 		if commit:
 			self.conn.commit()
@@ -1027,7 +1027,7 @@ class WikiProcessor(object):
 
 		all_connections, missed_etymologies = self.get_connections_from_wikitext_parts(wikitext_part_array)
 		node_connections = self.get_nodes_from_connections(all_connections)
-		roots, descs, table_sources, entry_numbers, places = self.get_mysql_data_from_nodes(node_connections)
+		roots, descs, table_sources, entry_numbers, places, confidences = self.get_mysql_data_from_nodes(node_connections)
 
 	def get_connections_from_single_wikitext(self, wikitext, store_intermediates=False):
 		self.store_intermediates = store_intermediates
@@ -1273,6 +1273,10 @@ class WikiProcessor(object):
 		return all_connections, missed_etymologies
 
 	def get_nodes_from_connections(self, all_connections):
+		"""
+		all_connections is an array of [root, desc, wikitype, entry_id, place, confidence]
+		https://app.diagrams.net/#G1znmeIPy83N4eLMthZDmNEaZaQDwCU9U6
+		"""
 		logging.info(f'Converting connections into nodes...')
 		indexErrors = []
 		keyErrors = []
@@ -1280,7 +1284,7 @@ class WikiProcessor(object):
 		for i, connection in enumerate(all_connections):
 	#		  if i % 50000 == 0: print(f'\r{i}/{len(all_connections)}', end='')
 			try:
-				nodeConnections += self.getNodeConnections(connection)
+				nodeConnections += self.getNodeConnections(*connection)
 			except KeyError as k:
 				keyErrors.append(connection)
 				# print(f'KeyError in getNodeConnections for', connection, k)
@@ -1296,8 +1300,7 @@ class WikiProcessor(object):
 		return nodeConnections
 		# if del_after: del all_connections
 
-	def getNodeConnections(self, connection):
-		desc, root, conn_type, place, entry_id  = connection
+	def getNodeConnections(self, desc, root, conn_type, place, confidence, entry_id):
 		try:
 			if conn_type == 'cog': raise CognateError
 				
@@ -1307,7 +1310,7 @@ class WikiProcessor(object):
 			if len(rootNodes) >= 2 and len(descNodes) >= 2:
 				raise MultiConnectionError
 				
-			return [[di, ri, entry_id, place] for di in descNodes for ri in rootNodes]
+			return [[di, ri, entry_id, place, confidence] for di in descNodes for ri in rootNodes]
 
 		except MultiConnectionError as m:
 			print('MultiConnectionError!')
@@ -1455,8 +1458,8 @@ class WikiProcessor(object):
 
 	def get_mysql_data_from_nodes(self, node_connections):
 		
-		roots = []; descs = []; table_sources = []; entry_numbers = []; places = []
-		for i, (desc, root, entry_id, place) in enumerate(node_connections):
+		roots = []; descs = []; table_sources = []; entry_numbers = []; places = []; confidences = []
+		for i, (desc, root, entry_id, place, confidence) in enumerate(node_connections):
 			desc_id = self.getOrCreateIdWithDict(desc['word'], desc['language'])
 			root_id = self.getOrCreateIdWithDict(root['word'], root['language'])
 
@@ -1465,6 +1468,7 @@ class WikiProcessor(object):
 			table_sources.append(entry_id)
 			entry_numbers.append(self.en_dict[entry_id])
 			places.append(place)
+			confidences.append(confidence)
 
 		if self.store_intermediates: 
 			self.roots = roots
@@ -1472,7 +1476,8 @@ class WikiProcessor(object):
 			self.table_sources = table_sources
 			self.entry_numbers = entry_numbers
 			self.places = places
-		return roots, descs, table_sources, entry_numbers, places
+			self.confidences = confidences
+		return roots, descs, table_sources, entry_numbers, places, confidences
 
 	def insert_unmatched_words_into_mysql(self):
 		# TODO: Check all these for opportunities to improve word recognition
@@ -1489,7 +1494,7 @@ class WikiProcessor(object):
 			**value_dict
 		)
 
-	def insert_connections_into_mysql(self, roots, descs, table_sources, entry_numbers, places):
+	def insert_connections_into_mysql(self, roots, descs, table_sources, entry_numbers, places, confidences):
 		logging.info(f'Found {len(roots)} connection_sources. Inserting...')
 		# Connection sources 1.5min
 		insert(self.cursor, 'connection_sources', many=True, **{
@@ -1497,7 +1502,8 @@ class WikiProcessor(object):
 			'descendant':descs, 
 			'table_source':table_sources,
 			'entry_number':entry_numbers, 
-			'place': places
+			'place': places,
+			'confidence': confidences,
 		})
 
 		# Connection data 1 min
@@ -1685,6 +1691,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		preceding_text = wikitext_parts[wikitext]['preceding_text'] # no default
 		wikitype = wikitext_parts[wikitext]['wikitype']
 		place = wikitext_parts[wikitext].get('place', j)
+		confidence = 0; # default
 		
 		
 		# SKIP SINGLE WIKITEXT (THEN CONTINUE)
@@ -1716,7 +1723,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 #			  log(f'### Ignoring_2 EQUIVALENT_TEXTS {i}: {wikitext}')
 #			  for p in preceding_wikitext_array:
 #				  for p_p in wikitext_parts[p].get('preceding_wikitext_array',[]):
-#					  connections.append([p_p, wikitext, wikitype, place])
+#					  connections.append([p_p, wikitext, wikitype, place, confidence])
 #			  for f in following_wikitext_array:
 #				  wikitext_parts[f]['preceding_wikitext_array'] += preceding_wikitext_array
 #			  context.append(['EQUIVALENT', 'SINGLE_PATH']) # is equivalent needed?
@@ -1731,7 +1738,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif wikitype in RESTART_TYPES and preceding_text in RESTART_TEXTS:
 #			  log(f'### RESTART TEXTS {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, wikitype, place])
+#			  connections.append([starting_wikitext, wikitext, wikitype, place, confidence])
 #			  context.append(['RESTART'])
 
 			
@@ -1739,7 +1746,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif 'BRANCH' in context[-1] and wikitype in BRANCH_TYPES and preceding_text in BRANCH_TEXTS:
 #			  log(f'### BRANCH CONTINUATION {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, wikitype, place])
+#			  connections.append([starting_wikitext, wikitext, wikitype, place, confidence])
 #			  context.append(['RESTART'])
 
 			
@@ -1748,7 +1755,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		if wikitype in COGNATE_TYPES \
 				or (cognate_str(preceding_text) and wikitype in SINGLE_PATH_TYPES):
 			log(f'### COGNATE NEW {j}: {wikitext}')
-			connections.append([starting_wikitext, wikitext, 'cog', place])
+			connections.append([starting_wikitext, wikitext, 'cog', place, confidence])
 			context.append(['COGNATE'])
 #			  pdb.set_trace()
 			
@@ -1757,7 +1764,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 		
 #		  elif has_cognate() and wikitype in COGNATE_TYPES:
 #			  log(f'### COGNATE CONTINUE {i}: {wikitext}')
-#			  connections.append([starting_wikitext, wikitext, 'cog', place])
+#			  connections.append([starting_wikitext, wikitext, 'cog', place, confidence])
 #			  context.append(['COGNATE'])
 			
 		
@@ -1769,7 +1776,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 			if from_str(preceding_text): # If it is "... from ..."
 				log(f'# single path, SINGLE_PATH_TEXTS {j}: {wikitext}')
 				for p in preceding_wikitext_array:
-					connections.append([p, wikitext, wikitype, place])
+					connections.append([p, wikitext, wikitype, place, confidence])
 				context.append(['SINGLE_PATH'])
 			
 			# SIMPLE BRANCH
@@ -1780,7 +1787,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 					p_p_wikitext_array = wikitext_parts[p].get('preceding_wikitext_array', [])
 					wikitext_parts[wikitext]['preceding_wikitext_array'] = p_p_wikitext_array
 					for p_p in p_p_wikitext_array: 
-						connections.append([p_p, wikitext, wikitype, place])
+						connections.append([p_p, wikitext, wikitype, place, confidence])
 				context.append(['BRANCH'])
 				
 			else:
@@ -1806,6 +1813,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 					re.sub(RE_FIX_WIKITEXT, '', c[1]),
 					c[2], # wikitype
 					c[3], # place
+					c[4], # confidence
 					entry_id # add entry_id
 				] for c in connections
 			]
@@ -1834,6 +1842,7 @@ def get_entry_connections(wikitext_parts, verbose=False):
 			re.sub(RE_FIX_WIKITEXT, '', c[1]),
 			c[2], # wikitype
 			c[3], # place
+			c[4], # confidence
 			entry_id # add entry_id
 		] for c in connections
 	]
